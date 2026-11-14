@@ -1,0 +1,134 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  }
+  
+  .font-mono-thermal {
+    font-family: 'JetBrains Mono', 'Courier New', Courier, monospace;
+  }
+}
+
+/* Thermal receipt paper zigzag cut effect */
+.receipt-paper {
+  background-color: #ffffff;
+  position: relative;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+}
+
+.receipt-cut-top {
+  background: radial-gradient(circle at 10px -5px, transparent 12px, #fff 13px);
+  background-size: 20px 20px;
+  background-repeat: repeat-x;
+  height: 12px;
+}
+
+.receipt-cut-bottom {
+  background: radial-gradient(circle at 10px 15px, transparent 12px, #fff 13px);
+  background-size: 20px 20px;
+  background-repeat: repeat-x;
+  height: 12px;
+}
+
+/* Custom scrollbars for POS order view */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Print styling for 58mm/80mm thermal receipts, Table QR tent cards, and A4 reports */
+@media print {
+  @page {
+    margin: 8mm;
+    size: auto;
+  }
+
+  html,
+  body,
+  #root,
+  #root > div {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: #fff !important;
+    color: #000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  #thermal-print-target,
+  #thermal-print-target *,
+  #printable-tent-card,
+  #printable-tent-card *,
+  #a4-report-print-target,
+  #a4-report-print-target * {
+    visibility: visible;
+  }
+
+  #thermal-print-target {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100% !important;
+    max-width: 58mm; /* Defaults to 58mm in print, overridden if 80mm class is present */
+    margin: 0;
+    padding: 2mm !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 11px !important;
+    line-height: 1.25 !important;
+    color: #000 !important;
+    background: #fff !important;
+    box-shadow: none !important;
+  }
+
+  #thermal-print-target.paper-80mm {
+    max-width: 80mm !important;
+    font-size: 12px !important;
+  }
+
+  #printable-tent-card {
+    position: fixed;
+    left: 50%;
+    top: 10mm;
+    transform: translateX(-50%);
+    width: 100% !important;
+    max-width: 105mm !important;
+    margin: 0 !important;
+    background: #fff !important;
+    box-shadow: none !important;
+    z-index: 9999;
+  }
+
+  #a4-report-print-target {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+    color: #000 !important;
+    box-shadow: none !important;
+    border: none !important;
+    z-index: 9999;
+  }
+}

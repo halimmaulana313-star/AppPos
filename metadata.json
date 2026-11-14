@@ -1,0 +1,6 @@
+{
+  "name": "KasirKu POS & Printer Bluetooth",
+  "description": "Aplikasi kasir modern untuk pesanan, cetak struk thermal via Bluetooth ESC/POS, dan laporan penjualan harian.",
+  "requestFramePermissions": ["bluetooth"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

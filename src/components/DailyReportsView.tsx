@@ -11,10 +11,8 @@ import {
   Bluetooth,
   Calendar,
   CheckCircle2,
-  ChevronRight,
   Clock,
   Coffee,
-  CreditCard,
   DollarSign,
   Download,
   Eye,
@@ -37,7 +35,6 @@ import { DailySalesReport, Order, PrinterConfig, StoreProfile } from '../types/p
 import { bluetoothPrinter, BluetoothPrinterState } from '../utils/bluetoothThermalPrinter';
 import {
   formatDateOnly,
-  formatDateTime,
   formatNumber,
   formatRupiah,
   formatTimeOnly,
@@ -46,7 +43,6 @@ import {
   calculateDailyReport,
   exportReportToCSV,
   exportReportToExcel,
-  exportReportToHTML,
 } from '../utils/reportUtils';
 import { TableReportExportModal } from './TableReportExportModal';
 import { sounds } from '../utils/soundEffects';

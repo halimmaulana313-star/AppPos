@@ -6,23 +6,15 @@
 import React, { useState } from 'react';
 import {
   AlertCircle,
-  CheckCircle2,
   Edit2,
   KeyRound,
-  Lock,
   Mail,
   Phone,
-  Plus,
   Search,
   Shield,
-  ShieldAlert,
-  ShieldCheck,
   Trash2,
-  User,
-  UserCheck,
   UserPlus,
   Users,
-  UserX,
   X,
 } from 'lucide-react';
 import { AppUser, UserRole } from '../types/pos';

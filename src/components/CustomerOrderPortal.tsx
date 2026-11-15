@@ -6,13 +6,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
-  ArrowLeft,
   CheckCircle2,
   Clock,
   Download,
   Edit3,
   FileDown,
-  Flame,
   Loader2,
   Maximize2,
   Minus,
@@ -22,9 +20,7 @@ import {
   Send,
   ShieldCheck,
   ShoppingBag,
-  Sparkles,
   Store,
-  Trash2,
   UtensilsCrossed,
   X,
 } from 'lucide-react';
@@ -34,7 +30,6 @@ import {
   formatDateTime,
   formatNumber,
   formatRupiah,
-  formatTimeOnly,
   getLocalDateString,
 } from '../utils/formatters';
 import { sounds } from '../utils/soundEffects';
@@ -63,13 +58,12 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
   store,
   printerConfig = DEFAULT_PRINTER_CONFIG,
   initialTable = '',
-  onExitPortal,
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<string>('Semua');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [customerName, setCustomerName] = useState<string>('');
-  const [customerPhone, setCustomerPhone] = useState<string>('');
+  const [customerPhone] = useState<string>('');
   const [tableNumber, setTableNumber] = useState<string>(initialTable || '');
   const [orderType, setOrderType] = useState<'dine_in' | 'takeaway'>('dine_in');
   const [orderNotes, setOrderNotes] = useState<string>('');
@@ -1125,20 +1119,6 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
           })
         )}
       </div>
-
-      {/* Return to Cashier link if in test/preview mode */}
-      {onExitPortal && (
-        <div className="text-center py-6 pb-28">
-          <button
-            type="button"
-            onClick={onExitPortal}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-slate-200/90 hover:bg-slate-300 text-slate-700 text-xs font-bold transition-all cursor-pointer shadow-xs active:scale-95 border border-slate-300"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Kembali ke Aplikasi Kasir (Uji Coba)</span>
-          </button>
-        </div>
-      )}
 
       {/* Sticky Bottom Floating Cart Button */}
       {cart.length > 0 && (

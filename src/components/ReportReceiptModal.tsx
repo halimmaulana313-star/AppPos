@@ -10,7 +10,6 @@ import {
   Check,
   CheckCircle2,
   Copy,
-  Download,
   FileSpreadsheet,
   FileText,
   Printer,
@@ -21,6 +20,7 @@ import { DailySalesReport, PrinterConfig, StoreProfile } from '../types/pos';
 import { bluetoothPrinter, BluetoothPrinterState } from '../utils/bluetoothThermalPrinter';
 import {
   centerText,
+  copyTextToClipboard,
   createSeparator,
   formatDateOnly,
   formatDateTime,
@@ -183,9 +183,12 @@ export const ReportReceiptModal: React.FC<ReportReceiptModalProps> = ({
   };
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(generateReportText());
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    void copyTextToClipboard(generateReportText()).then((ok) => {
+      if (ok) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }
+    });
   };
 
   return (

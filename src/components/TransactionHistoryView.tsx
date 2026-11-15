@@ -5,22 +5,17 @@
 
 import React, { useMemo, useState } from 'react';
 import {
-  Calendar,
   CheckCircle2,
   Clock,
-  Download,
   FileSpreadsheet,
-  Filter,
   History,
   Printer,
-  RotateCcw,
   Search,
   Trash2,
-  User,
   XCircle,
 } from 'lucide-react';
 import { Order, StoreProfile } from '../types/pos';
-import { formatDateOnly, formatDateTime, formatRupiah, formatTimeOnly } from '../utils/formatters';
+import { formatDateTime, formatRupiah } from '../utils/formatters';
 import { exportTransactionsToExcel } from '../utils/reportUtils';
 import { sounds } from '../utils/soundEffects';
 

@@ -5,35 +5,27 @@
 
 import React, { useEffect, useState } from 'react';
 import {
-  AlertCircle,
   AlertTriangle,
   Bluetooth,
   BluetoothConnected,
   BluetoothOff,
-  Building,
   Check,
   CheckCircle2,
-  Crown,
   Database,
   Download,
   Image as ImageIcon,
-  Info,
-  Printer,
   QrCode,
-  Receipt,
   RotateCcw,
   Save,
   Sparkles,
   Store,
   Trash2,
   Upload,
-  Wifi,
   X,
 } from 'lucide-react';
 import { PrinterConfig, StoreProfile } from '../types/pos';
 import { BluetoothPrinterState } from '../utils/bluetoothThermalPrinter';
 import { getLocalDateString } from '../utils/formatters';
-import { DEFAULT_STORE_PROFILE, INITIAL_PRODUCTS, getInitialOrders } from '../utils/initialData';
 import { PRESET_LOGOS } from '../utils/presetLogos';
 import { getStoreQrisImageDataUrl, optimizeQrisImageFile } from '../utils/qrCodeGenerator';
 import { sounds } from '../utils/soundEffects';
@@ -62,13 +54,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   store,
   setStore,
   printerConfig,
-  setPrinterConfig,
   printerState,
   onOpenPrinterModal,
   onResetData,
   fullDataPayload,
   onImportData,
-  onOpenLogoManager,
   onQuickConnectBluetooth,
 }) => {
   const [formData, setFormData] = useState<StoreProfile>({ ...store });
@@ -787,7 +777,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             className="flex items-center gap-2 px-4 py-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold text-xs transition-colors ml-auto cursor-pointer"
           >
             <RotateCcw className="w-4 h-4" />
-            <span>Reset ke Data Demo Awal</span>
+            <span>Reset ke Pengaturan Awal</span>
           </button>
         </div>
       </div>
@@ -810,10 +800,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
             <div>
               <h3 className="font-extrabold text-base text-slate-900">
-                Reset Semua Data ke Demo Awal?
+                Reset Semua Data ke Pengaturan Awal?
               </h3>
               <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
-                Tindakan ini akan mengembalikan profil toko, daftar menu, riwayat transaksi, dan pengguna ke data demo awal. Sebaiknya unduh cadangan JSON terlebih dahulu.
+                Tindakan ini akan mengembalikan profil toko, daftar menu, riwayat transaksi, dan pengguna ke pengaturan awal. Sebaiknya unduh cadangan JSON terlebih dahulu.
               </p>
             </div>
             <div className="grid grid-cols-2 gap-2.5 pt-2">
@@ -831,7 +821,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   setIsResetConfirmOpen(false);
                   setBackupFeedback({
                     type: 'success',
-                    message: 'Data aplikasi telah dikembalikan ke pengaturan demo awal.',
+                    message: 'Data aplikasi telah dikembalikan ke pengaturan awal.',
                   });
                 }}
                 className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-md shadow-rose-600/20 transition-all active:scale-95 cursor-pointer"

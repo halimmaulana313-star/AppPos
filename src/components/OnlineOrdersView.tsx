@@ -6,28 +6,21 @@
 import React, { useState } from 'react';
 import {
   AlertCircle,
-  Bell,
   Check,
   CheckCircle2,
   Clock,
   CreditCard,
   ExternalLink,
-  Flame,
-  Plus,
   Printer,
   QrCode,
   RefreshCw,
-  RotateCcw,
   Search,
   ShoppingBag,
-  Sparkles,
   Trash2,
-  User,
-  UtensilsCrossed,
   X,
   XCircle,
 } from 'lucide-react';
-import { CartItem, OnlineOrder, OnlineOrderStatus, PrinterConfig, Product, StoreProfile } from '../types/pos';
+import { OnlineOrder, PrinterConfig, Product, StoreProfile } from '../types/pos';
 import { formatNumber, formatRupiah, formatTimeOnly } from '../utils/formatters';
 import { sounds } from '../utils/soundEffects';
 import { onlineOrdersManager } from '../utils/onlineOrdersManager';
@@ -45,7 +38,6 @@ interface OnlineOrdersViewProps {
 
 export const OnlineOrdersView: React.FC<OnlineOrdersViewProps> = ({
   onlineOrders,
-  products,
   store,
   printerConfig,
   printerState,
@@ -145,27 +137,6 @@ export const OnlineOrdersView: React.FC<OnlineOrdersViewProps> = ({
       message: 'Pesanan dihapus dari daftar riwayat online.',
     });
     setOrderIdToDelete(null);
-  };
-
-  // Demo order generator for quick testing
-  const handleCreateDemoOrder = async () => {
-    const tables = ['02', '03', '05', '07', '10'];
-    const randomTable = tables[Math.floor(Math.random() * tables.length)];
-    const demo = onlineOrdersManager.createDemoOrder(products, store, randomTable);
-    const result = await onlineOrdersManager.addOrder(demo);
-    if (result.ok) {
-      sounds.playOrderNotification();
-      setToastNotification({
-        type: 'success',
-        message: `Pesanan simulasi #${demo.orderCode} (Meja ${randomTable}) berhasil masuk ke sistem!`,
-      });
-    } else {
-      sounds.playError();
-      setToastNotification({
-        type: 'error',
-        message: result.error || 'Gagal membuat pesanan simulasi.',
-      });
-    }
   };
 
   const handleRefreshOrders = async () => {
@@ -279,16 +250,6 @@ export const OnlineOrdersView: React.FC<OnlineOrdersViewProps> = ({
 
           <button
             type="button"
-            onClick={() => void handleCreateDemoOrder()}
-            className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer"
-            title="Simulasikan ada pelanggan yang memesan dari Meja 03"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-            <span>+ Simulasi Pesanan Masuk</span>
-          </button>
-
-          <button
-            type="button"
             onClick={() => onOpenCustomerView()}
             className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-600/20 active:scale-95 cursor-pointer"
           >
@@ -385,15 +346,6 @@ export const OnlineOrdersView: React.FC<OnlineOrdersViewProps> = ({
               ? 'Belum ada pesanan online baru yang menunggu konfirmasi saat ini.'
               : 'Belum ada pesanan yang sesuai dengan filter yang dipilih.'}
           </p>
-          <div className="pt-2">
-            <button
-              type="button"
-              onClick={handleCreateDemoOrder}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
-            >
-              Coba Buat Pesanan Simulasi (Meja 03)
-            </button>
-          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

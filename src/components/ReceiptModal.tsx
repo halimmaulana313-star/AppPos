@@ -10,8 +10,6 @@ import {
   Check,
   CheckCircle2,
   Copy,
-  Download,
-  Eye,
   FileText,
   Play,
   Printer,
@@ -22,9 +20,9 @@ import { Order, PrinterConfig, StoreProfile } from '../types/pos';
 import { bluetoothPrinter, BluetoothPrinterState } from '../utils/bluetoothThermalPrinter';
 import {
   centerText,
+  copyTextToClipboard,
   createSeparator,
   formatDateOnly,
-  formatDateTime,
   formatNumber,
   formatRupiah,
   formatTimeOnly,
@@ -199,16 +197,19 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
       if (ticks >= 7) {
         clearInterval(interval);
         setIsSimulating(false);
-        setPrintSuccess('Simulasi cetak thermal selesai!');
+        setPrintSuccess('Tes cetak thermal selesai!');
         setTimeout(() => setPrintSuccess(null), 3000);
       }
     }, 180);
   };
 
   const handleCopyText = () => {
-    navigator.clipboard.writeText(generateReceiptText());
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    void copyTextToClipboard(generateReceiptText()).then((ok) => {
+      if (ok) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }
+    });
   };
 
   return (
@@ -485,10 +486,10 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                 onClick={handleSimulatePrint}
                 disabled={isSimulating}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors"
-                title="Simulasi cetak thermal animasi & suara"
+                title="Tes suara & tampilan cetak thermal"
               >
                 <Play className="w-3.5 h-3.5 text-blue-600" />
-                <span>Simulasi Suara</span>
+                <span>Tes Suara</span>
               </button>
 
               <button

@@ -9,15 +9,10 @@ import {
   CheckCircle2,
   Crown,
   Eye,
-  FileImage,
   Image as ImageIcon,
   Lock,
-  Palette,
-  Printer,
   Receipt,
   RotateCcw,
-  Save,
-  Shield,
   Sparkles,
   Store,
   Trash2,
@@ -40,7 +35,6 @@ export const LogoManagementView: React.FC<LogoManagementViewProps> = ({
   isMaster,
   onNavigateToTab,
 }) => {
-  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
   const [previewLogo, setPreviewLogo] = useState<string | undefined>(store.logoUrl);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -90,7 +84,6 @@ export const LogoManagementView: React.FC<LogoManagementViewProps> = ({
     reader.onload = (event) => {
       const dataUrl = event.target?.result as string;
       setPreviewLogo(dataUrl);
-      setSelectedPresetId(null);
       // Automatically save to store profile
       setStore((prev) => ({ ...prev, logoUrl: dataUrl }));
       setSaveSuccess(true);
@@ -101,7 +94,6 @@ export const LogoManagementView: React.FC<LogoManagementViewProps> = ({
   };
 
   const handleSelectPreset = (preset: PresetLogo) => {
-    setSelectedPresetId(preset.id);
     setPreviewLogo(preset.dataUrl);
     setStore((prev) => ({ ...prev, logoUrl: preset.dataUrl }));
     setSaveSuccess(true);
@@ -111,7 +103,6 @@ export const LogoManagementView: React.FC<LogoManagementViewProps> = ({
 
   const handleRemoveLogo = () => {
     setPreviewLogo(undefined);
-    setSelectedPresetId(null);
     setStore((prev) => ({ ...prev, logoUrl: undefined }));
     setSaveSuccess(true);
     sounds.playItemBeep();

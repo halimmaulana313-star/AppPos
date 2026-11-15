@@ -9,15 +9,12 @@ import {
   Copy,
   Download,
   ExternalLink,
-  Layers,
-  LayoutGrid,
   Printer,
   QrCode,
-  Sparkles,
   Store,
-  Table as TableIcon,
 } from 'lucide-react';
 import { StoreProfile } from '../types/pos';
+import { copyTextToClipboard } from '../utils/formatters';
 import { buildCustomerOrderUrl, downloadQRImage, generateQRCodeDataUrl } from '../utils/qrCodeGenerator';
 import { sounds } from '../utils/soundEffects';
 
@@ -33,7 +30,6 @@ export const TableQRView: React.FC<TableQRViewProps> = ({ store, onOpenCustomerV
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [copied, setCopied] = useState<boolean>(false);
 
-  const activeTableLabel = isTakeaway ? 'Bawa Pulang / Takeaway' : selectedTable;
   const orderUrl = buildCustomerOrderUrl(isTakeaway ? undefined : selectedTable);
 
   useEffect(() => {
@@ -44,9 +40,12 @@ export const TableQRView: React.FC<TableQRViewProps> = ({ store, onOpenCustomerV
 
   const handleCopyLink = () => {
     sounds.playItemBeep();
-    navigator.clipboard.writeText(orderUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    void copyTextToClipboard(orderUrl).then((ok) => {
+      if (ok) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }
+    });
   };
 
   const handleDownload = () => {
@@ -84,7 +83,7 @@ export const TableQRView: React.FC<TableQRViewProps> = ({ store, onOpenCustomerV
             className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-600/20 active:scale-95 cursor-pointer"
           >
             <ExternalLink className="w-3.5 h-3.5" />
-            <span>Uji Coba Tampilan Pelanggan</span>
+            <span>Buka Portal Pelanggan</span>
           </button>
         </div>
       </div>

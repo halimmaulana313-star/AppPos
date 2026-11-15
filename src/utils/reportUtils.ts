@@ -4,7 +4,7 @@
  */
 
 import { DailySalesReport, Order, StoreProfile } from '../types/pos';
-import { formatDateOnly, formatDateTime, formatNumber, formatRupiah, formatTimeOnly, getLocalDateString } from './formatters';
+import { formatDateOnly, formatDateTime, formatRupiah, getLocalDateString } from './formatters';
 
 export function calculateDailyReport(orders: Order[], targetDate: string): DailySalesReport {
   const dayOrders = orders.filter((o) => {

@@ -11,19 +11,11 @@ import {
   BluetoothOff,
   CheckCircle2,
   HelpCircle,
-  Laptop,
-  Power,
   Printer,
-  RefreshCw,
   RotateCw,
-  Settings,
-  Smartphone,
-  Sliders,
-  Sparkles,
-  Volume2,
   X,
 } from 'lucide-react';
-import { PaperWidth, PrinterConfig, StoreProfile } from '../types/pos';
+import { PrinterConfig, StoreProfile } from '../types/pos';
 import { bluetoothPrinter, BluetoothPrinterState } from '../utils/bluetoothThermalPrinter';
 import { sounds } from '../utils/soundEffects';
 
@@ -232,7 +224,7 @@ export const PrinterSettingsModal: React.FC<PrinterSettingsModalProps> = ({
 
             {/* Test Print button */}
             <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between">
-              <span className="text-xs text-slate-600">Uji coba cetak strip teks:</span>
+              <span className="text-xs text-slate-600">Tes cetak strip teks:</span>
               <button
                 type="button"
                 onClick={handleTestPrint}

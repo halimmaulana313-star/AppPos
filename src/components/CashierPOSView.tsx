@@ -10,7 +10,6 @@ import {
   Columns2,
   CreditCard,
   Edit3,
-  Flame,
   LayoutGrid,
   Minus,
   Percent,
@@ -20,12 +19,11 @@ import {
   Search,
   ShoppingBag,
   Trash2,
-  User,
   UtensilsCrossed,
   X,
 } from 'lucide-react';
 import { CartItem, Product, StoreProfile } from '../types/pos';
-import { formatNumber, formatRupiah } from '../utils/formatters';
+import { formatRupiah } from '../utils/formatters';
 import { sounds } from '../utils/soundEffects';
 
 interface CashierPOSViewProps {
@@ -109,9 +107,9 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
     setCart((prev) => {
       const existingIdx = prev.findIndex((item) => item.product.id === product.id);
       if (existingIdx >= 0) {
-        const copy = [...prev];
-        copy[existingIdx].quantity += 1;
-        return copy;
+        return prev.map((item, idx) =>
+          idx === existingIdx ? { ...item, quantity: item.quantity + 1 } : item
+        );
       }
       return [...prev, { product, quantity: 1, discount: 0 }];
     });
@@ -120,29 +118,22 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
   const handleUpdateQuantity = (index: number, delta: number) => {
     sounds.playItemBeep();
     setCart((prev) => {
-      const copy = [...prev];
-      const newQty = copy[index].quantity + delta;
+      const target = prev[index];
+      if (!target) return prev;
+      const newQty = target.quantity + delta;
       if (newQty <= 0) {
-        copy.splice(index, 1);
-      } else {
-        copy[index].quantity = newQty;
+        return prev.filter((_, idx) => idx !== index);
       }
-      return copy;
+      return prev.map((item, idx) => (idx === index ? { ...item, quantity: newQty } : item));
     });
-  };
-
-  const handleRemoveItem = (index: number) => {
-    sounds.playError();
-    setCart((prev) => prev.filter((_, idx) => idx !== index));
   };
 
   const handleSaveItemNote = (noteText: string) => {
     if (activeItemNoteModal !== null) {
-      setCart((prev) => {
-        const copy = [...prev];
-        copy[activeItemNoteModal.index].note = noteText.trim();
-        return copy;
-      });
+      const targetIdx = activeItemNoteModal.index;
+      setCart((prev) =>
+        prev.map((item, idx) => (idx === targetIdx ? { ...item, note: noteText.trim() } : item))
+      );
       setActiveItemNoteModal(null);
     }
   };
@@ -532,7 +523,6 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
               </div>
             ) : (
               cart.map((item, index) => {
-                const isOutOfStock = item.product.stock <= 0;
                 const isLowStock = item.product.stock > 0 && item.product.stock <= lowStockThreshold;
                 const isExceedingStock = item.quantity > item.product.stock;
 

@@ -8,10 +8,8 @@ import {
   Clock,
   LogOut,
   QrCode,
-  Shield,
   ShoppingBag,
   Store,
-  UserCheck,
 } from 'lucide-react';
 import { AppUser, PrinterConfig, StoreProfile } from '../types/pos';
 import { BluetoothPrinterState } from '../utils/bluetoothThermalPrinter';

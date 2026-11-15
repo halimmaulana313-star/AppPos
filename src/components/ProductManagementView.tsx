@@ -7,17 +7,13 @@ import React, { useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Edit2,
-  Image as ImageIcon,
-  Minus,
-  Package,
   Plus,
   Search,
-  Tag,
   Trash2,
   X,
 } from 'lucide-react';
 import { Product } from '../types/pos';
-import { formatNumber, formatRupiah } from '../utils/formatters';
+import { formatRupiah } from '../utils/formatters';
 import { sounds } from '../utils/soundEffects';
 
 interface ProductManagementViewProps {

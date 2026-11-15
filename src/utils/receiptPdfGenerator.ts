@@ -382,7 +382,6 @@ export async function generateDailyReportReceiptPDF(
   const is80mm = printerConfig.paperWidth === '80mm';
   const pageWidthMm = is80mm ? 80 : 58;
   const marginX = is80mm ? 5 : 4;
-  const contentWidth = pageWidthMm - marginX * 2;
   const baseFontSize = is80mm ? 8.2 : 7.2;
   const lineH = is80mm ? 4.1 : 3.5;
 

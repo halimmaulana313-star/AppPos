@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, LogOut, Menu, QrCode, ShoppingBag } from 'lucide-react';
 import { CashierPOSView } from './components/CashierPOSView';
 import { CustomerOrderPortal } from './components/CustomerOrderPortal';
@@ -251,6 +251,18 @@ export default function App() {
     }
     return '';
   });
+
+  useEffect(() => {
+    const handlePopState = () => {
+      if (typeof window === 'undefined') return;
+      const params = new URLSearchParams(window.location.search);
+      const isOrder = params.get('mode') === 'order' || params.get('order') === 'true';
+      setIsCustomerPortalActive(isOrder);
+      setCustomerPortalTable(params.get('table') || '');
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   // Online Orders State with Server SSE/REST + BroadcastChannel Sync
   const [onlineOrders, setOnlineOrders] = useState<OnlineOrder[]>(() => onlineOrdersManager.getOrders());
@@ -675,13 +687,6 @@ export default function App() {
         store={portalStore}
         printerConfig={printerConfig}
         initialTable={customerPortalTable}
-        onExitPortal={() => {
-          setIsCustomerPortalActive(false);
-          if (typeof window !== 'undefined' && window.history) {
-            window.history.replaceState({}, '', window.location.pathname);
-          }
-          void onlineOrdersManager.refreshFromServer(false);
-        }}
       />
     );
   }
@@ -789,6 +794,12 @@ export default function App() {
                 if (isMaster) {
                   void onlineOrdersManager.syncCatalogToServer(store, products);
                 }
+                if (typeof window !== 'undefined' && window.history) {
+                  const targetUrl = tbl
+                    ? `${window.location.pathname}?mode=order&table=${encodeURIComponent(tbl)}`
+                    : `${window.location.pathname}?mode=order`;
+                  window.history.pushState({ portal: true }, '', targetUrl);
+                }
                 setCustomerPortalTable(tbl || '');
                 setIsCustomerPortalActive(true);
               }}
@@ -801,6 +812,12 @@ export default function App() {
               onOpenCustomerView={(tbl) => {
                 if (isMaster) {
                   void onlineOrdersManager.syncCatalogToServer(store, products);
+                }
+                if (typeof window !== 'undefined' && window.history) {
+                  const targetUrl = tbl
+                    ? `${window.location.pathname}?mode=order&table=${encodeURIComponent(tbl)}`
+                    : `${window.location.pathname}?mode=order`;
+                  window.history.pushState({ portal: true }, '', targetUrl);
                 }
                 setCustomerPortalTable(tbl || '');
                 setIsCustomerPortalActive(true);

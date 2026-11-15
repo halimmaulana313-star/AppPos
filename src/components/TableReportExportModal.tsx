@@ -5,21 +5,16 @@
 
 import React, { useState } from 'react';
 import {
-  Calendar,
   CheckCircle2,
-  Clock,
   Download,
   FileCode,
   FileSpreadsheet,
-  FileText,
   Printer,
   Sparkles,
-  Store,
-  TrendingUp,
   X,
 } from 'lucide-react';
 import { DailySalesReport, StoreProfile } from '../types/pos';
-import { formatDateOnly, formatDateTime, formatNumber, formatRupiah, formatTimeOnly } from '../utils/formatters';
+import { formatDateOnly, formatRupiah } from '../utils/formatters';
 import {
   exportReportToCSV,
   exportReportToExcel,

@@ -131,6 +131,64 @@ export async function getStoreQrisImageDataUrl(store: {
 }
 
 /**
+ * Optimize an uploaded QRIS image file so large camera photos fit safely in localStorage
+ * and sync rapidly over SSE/REST to all cashier & customer portal devices.
+ */
+export async function optimizeQrisImageFile(
+  file: File,
+  maxDimension: number = 900
+): Promise<string> {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const result = ev.target?.result;
+      if (typeof result === 'string') resolve(result);
+      else reject(new Error('Gagal membaca file gambar QRIS.'));
+    };
+    reader.onerror = () => reject(new Error('Gagal membaca file gambar QRIS.'));
+    reader.readAsDataURL(file);
+  });
+
+  // If already compact (< 300KB), keep original pixel-perfect image
+  if (dataUrl.length < 300_000) {
+    return dataUrl;
+  }
+
+  return new Promise<string>((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const scale = Math.min(1, maxDimension / Math.max(img.width || 1, img.height || 1));
+        const targetW = Math.max(1, Math.round(img.width * scale));
+        const targetH = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, targetW, targetH);
+        ctx.drawImage(img, 0, 0, targetW, targetH);
+
+        const pngUrl = canvas.toDataURL('image/png');
+        if (pngUrl.length <= 450_000) {
+          resolve(pngUrl);
+          return;
+        }
+        resolve(canvas.toDataURL('image/jpeg', 0.88));
+      } catch {
+        resolve(dataUrl);
+      }
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+/**
  * Download QR Code as PNG file
  */
 export function downloadQRImage(dataUrl: string, fileName: string): void {

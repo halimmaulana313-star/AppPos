@@ -35,7 +35,7 @@ import { BluetoothPrinterState } from '../utils/bluetoothThermalPrinter';
 import { getLocalDateString } from '../utils/formatters';
 import { DEFAULT_STORE_PROFILE, INITIAL_PRODUCTS, getInitialOrders } from '../utils/initialData';
 import { PRESET_LOGOS } from '../utils/presetLogos';
-import { getStoreQrisImageDataUrl } from '../utils/qrCodeGenerator';
+import { getStoreQrisImageDataUrl, optimizeQrisImageFile } from '../utils/qrCodeGenerator';
 import { sounds } from '../utils/soundEffects';
 
 interface SettingsViewProps {
@@ -77,6 +77,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
   const [backupFeedback, setBackupFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [previewStoreQrisUrl, setPreviewStoreQrisUrl] = useState<string>('');
+  const [qrisSyncNote, setQrisSyncNote] = useState<string | null>(null);
 
   useEffect(() => {
     setFormData({ ...store });
@@ -531,6 +532,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     onClick={() => {
                       setFormData((prev) => ({ ...prev, qrisImageUrl: undefined }));
                       setStore((prev) => ({ ...prev, qrisImageUrl: undefined }));
+                      setQrisSyncNote('QRIS kustom dihapus & dikembalikan ke QRIS Toko default.');
+                      setTimeout(() => setQrisSyncNote(null), 4000);
                       sounds.playError();
                     }}
                     className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-800 font-semibold cursor-pointer"
@@ -540,6 +543,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </button>
                 )}
               </div>
+
+              {qrisSyncNote && (
+                <div className="p-2.5 rounded-xl bg-emerald-100/80 border border-emerald-300 text-emerald-900 text-xs font-bold flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                  <span>{qrisSyncNote}</span>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
                 {/* QRIS Image Preview / Upload Box */}
@@ -560,16 +570,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                           onChange={(e) => {
                             const file = e.target.files?.[0];
                             if (file) {
-                              const reader = new FileReader();
-                              reader.onload = (ev) => {
-                                const imgUrl = ev.target?.result as string;
-                                if (imgUrl) {
-                                  setFormData((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
-                                  setStore((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
-                                  sounds.playItemBeep();
-                                }
-                              };
-                              reader.readAsDataURL(file);
+                              void optimizeQrisImageFile(file).then((imgUrl) => {
+                                setFormData((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
+                                setStore((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
+                                setQrisSyncNote('QRIS baru owner tersimpan & disinkronkan ke Kasir dan Portal Online.');
+                                setTimeout(() => setQrisSyncNote(null), 5000);
+                                sounds.playItemBeep();
+                              });
                             }
                           }}
                         />
@@ -597,16 +604,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                           onChange={(e) => {
                             const file = e.target.files?.[0];
                             if (file) {
-                              const reader = new FileReader();
-                              reader.onload = (ev) => {
-                                const imgUrl = ev.target?.result as string;
-                                if (imgUrl) {
-                                  setFormData((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
-                                  setStore((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
-                                  sounds.playItemBeep();
-                                }
-                              };
-                              reader.readAsDataURL(file);
+                              void optimizeQrisImageFile(file).then((imgUrl) => {
+                                setFormData((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
+                                setStore((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
+                                setQrisSyncNote('QRIS owner berhasil diunggah & disinkronkan ke Kasir dan Portal Online.');
+                                setTimeout(() => setQrisSyncNote(null), 5000);
+                                sounds.playItemBeep();
+                              });
                             }
                           }}
                         />

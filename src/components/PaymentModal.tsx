@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import { CartItem, PaymentMethod, PrinterConfig, StoreProfile } from '../types/pos';
 import { formatNumber, formatRupiah } from '../utils/formatters';
-import { getStoreQrisImageDataUrl } from '../utils/qrCodeGenerator';
+import { getStoreQrisImageDataUrl, optimizeQrisImageFile } from '../utils/qrCodeGenerator';
 import { sounds } from '../utils/soundEffects';
 
 interface PaymentModalProps {
@@ -155,9 +155,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const base64 = event.target?.result as string;
+    void optimizeQrisImageFile(file).then((base64) => {
       if (base64 && onUpdateStore) {
         onUpdateStore((prev) => ({
           ...prev,
@@ -165,8 +163,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
         }));
         sounds.playItemBeep();
       }
-    };
-    reader.readAsDataURL(file);
+    });
   };
 
   const handleRemoveQris = () => {

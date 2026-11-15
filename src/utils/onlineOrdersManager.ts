@@ -31,6 +31,7 @@ class OnlineOrdersManager {
   private paidPosListeners: Set<(posOrders: Order[], latestPaid?: PaidPosEvent) => void> = new Set();
   private knownOrderIds: Set<string> = new Set();
   private hasInitializedServer = false;
+  private lastCatalogUpdatedAt: string | null = null;
 
   constructor() {
     if (typeof window === 'undefined') return;
@@ -44,7 +45,7 @@ class OnlineOrdersManager {
       try {
         this.channel = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
         this.channel.onmessage = (event) => {
-          const { type, order, posOrder } = event.data || {};
+          const { type, order, posOrder, catalog } = event.data || {};
           if (type === 'NEW_ONLINE_ORDER' && order) {
             const current = this.getOrders();
             const merged = [order, ...current.filter((o) => o.id !== order.id)];
@@ -61,6 +62,11 @@ class OnlineOrdersManager {
             if (posOrder) {
               this.notifyPaidPosListeners([posOrder], { order, posOrder });
             }
+          } else if (type === 'CATALOG_UPDATED' && catalog) {
+            if (catalog.updatedAt) {
+              this.lastCatalogUpdatedAt = catalog.updatedAt;
+            }
+            this.notifyCatalogListeners(catalog as CatalogSnapshot);
           } else if (type === 'ORDER_STATUS_CHANGED' || type === 'REFRESH_ORDERS') {
             this.notifyListeners(this.getOrders());
           }
@@ -129,6 +135,7 @@ class OnlineOrdersManager {
             this.notifyPaidPosListeners(data.paidPosOrders);
           }
           if (data.catalog && (data.catalog.store || data.catalog.products)) {
+            this.lastCatalogUpdatedAt = data.catalog.updatedAt ?? null;
             this.notifyCatalogListeners(data.catalog);
           }
         } catch (err) {
@@ -214,6 +221,7 @@ class OnlineOrdersManager {
       es.addEventListener('catalog_updated', (evt) => {
         try {
           const catalog = JSON.parse((evt as MessageEvent).data) as CatalogSnapshot;
+          this.lastCatalogUpdatedAt = catalog.updatedAt ?? null;
           this.notifyCatalogListeners(catalog);
         } catch (err) {
           console.warn('SSE catalog_updated parse error:', err);
@@ -297,6 +305,21 @@ class OnlineOrdersManager {
       if (Array.isArray(data.orders)) {
         this.applyServerOrders(data.orders, this.hasInitializedServer && detectNew);
         this.hasInitializedServer = true;
+
+        // Also check catalog updates so Store QRIS changes propagate even if SSE is buffered
+        if (this.catalogListeners.size > 0) {
+          const prevCatalogUpdatedAt = this.lastCatalogUpdatedAt;
+          const catSnap = await this.fetchCatalogFromServer();
+          if (
+            catSnap &&
+            (catSnap.store || catSnap.products) &&
+            catSnap.updatedAt &&
+            catSnap.updatedAt !== prevCatalogUpdatedAt
+          ) {
+            this.notifyCatalogListeners(catSnap);
+          }
+        }
+
         return data.orders;
       }
     } catch {
@@ -567,16 +590,34 @@ class OnlineOrdersManager {
     });
   }
 
-  async syncCatalogToServer(store: StoreProfile, products: Product[]): Promise<void> {
-    if (typeof window === 'undefined') return;
+  async syncCatalogToServer(
+    store: StoreProfile,
+    products: Product[]
+  ): Promise<CatalogSnapshot | null> {
+    if (typeof window === 'undefined') return null;
     try {
-      await fetch('/api/catalog', {
+      const res = await fetch('/api/catalog', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ store, products }),
       });
+      if (!res.ok) return null;
+      const data = (await res.json()) as { ok?: boolean; catalog?: CatalogSnapshot };
+      if (data.catalog) {
+        this.lastCatalogUpdatedAt = data.catalog.updatedAt ?? null;
+        if (this.channel) {
+          try {
+            this.channel.postMessage({ type: 'CATALOG_UPDATED', catalog: data.catalog });
+          } catch {
+            // ignore
+          }
+        }
+        return data.catalog;
+      }
+      return null;
     } catch {
       // ignore silently when offline
+      return null;
     }
   }
 
@@ -585,7 +626,11 @@ class OnlineOrdersManager {
     try {
       const res = await fetch('/api/catalog', { cache: 'no-store' });
       if (!res.ok) return null;
-      return (await res.json()) as CatalogSnapshot;
+      const snap = (await res.json()) as CatalogSnapshot;
+      if (snap?.updatedAt) {
+        this.lastCatalogUpdatedAt = snap.updatedAt;
+      }
+      return snap;
     } catch {
       return null;
     }

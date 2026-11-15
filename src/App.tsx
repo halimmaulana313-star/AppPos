@@ -134,32 +134,56 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Save to LocalStorage
+  // Save to LocalStorage safely (guard against quota exceeded errors on large images)
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_STORE, JSON.stringify(store));
+    try {
+      localStorage.setItem(STORAGE_KEY_STORE, JSON.stringify(store));
+    } catch (err) {
+      console.warn('Gagal menyimpan store ke localStorage:', err);
+    }
   }, [store]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_PRODUCTS, JSON.stringify(products));
+    try {
+      localStorage.setItem(STORAGE_KEY_PRODUCTS, JSON.stringify(products));
+    } catch (err) {
+      console.warn('Gagal menyimpan products ke localStorage:', err);
+    }
   }, [products]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_ORDERS, JSON.stringify(orders));
+    try {
+      localStorage.setItem(STORAGE_KEY_ORDERS, JSON.stringify(orders));
+    } catch (err) {
+      console.warn('Gagal menyimpan orders ke localStorage:', err);
+    }
   }, [orders]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_PRINTER, JSON.stringify(printerConfig));
+    try {
+      localStorage.setItem(STORAGE_KEY_PRINTER, JSON.stringify(printerConfig));
+    } catch (err) {
+      console.warn('Gagal menyimpan printerConfig ke localStorage:', err);
+    }
   }, [printerConfig]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(users));
+    try {
+      localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(users));
+    } catch (err) {
+      console.warn('Gagal menyimpan users ke localStorage:', err);
+    }
   }, [users]);
 
   useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem(STORAGE_KEY_AUTH, JSON.stringify(currentUser));
-    } else {
-      localStorage.removeItem(STORAGE_KEY_AUTH);
+    try {
+      if (currentUser) {
+        localStorage.setItem(STORAGE_KEY_AUTH, JSON.stringify(currentUser));
+      } else {
+        localStorage.removeItem(STORAGE_KEY_AUTH);
+      }
+    } catch {
+      // ignore
     }
   }, [currentUser]);
 
@@ -235,6 +259,9 @@ export default function App() {
   const [activeOnlineOrderId, setActiveOnlineOrderId] = useState<string | null>(null);
   const [activeOnlinePaymentPref, setActiveOnlinePaymentPref] = useState<'pay_at_cashier' | 'qris_online' | null>(null);
   const [remoteCatalog, setRemoteCatalog] = useState<{ store: StoreProfile | null; products: Product[] | null } | null>(null);
+  const [isCatalogReady, setIsCatalogReady] = useState<boolean>(false);
+  const lastAppliedCatalogAtRef = useRef<string | null>(null);
+  const skipNextCatalogPushRef = useRef<boolean>(false);
   const processedPosOrderIdsRef = useRef<Set<string>>(new Set());
 
   // Keep processed POS order IDs synced with persisted orders so stock is never deducted twice
@@ -335,32 +362,113 @@ export default function App() {
     return () => unsubscribePaid();
   }, [isCustomerPortalActive, reconcilePaidPosOrders]);
 
-  // Push store & menu catalog from authenticated POS to server so QR customers on other devices see live data
+  // Hydrate & subscribe to live server catalog (Store Profile + QRIS + Menu) across ALL modes & roles
   useEffect(() => {
-    if (currentUser && !isCustomerPortalActive) {
-      void onlineOrdersManager.syncCatalogToServer(store, products);
-    }
-  }, [currentUser, isCustomerPortalActive, store, products]);
-
-  // Fetch & subscribe to live catalog when Customer Portal is active
-  useEffect(() => {
-    if (!isCustomerPortalActive) return;
     let active = true;
-    void onlineOrdersManager.fetchCatalogFromServer().then((snap) => {
-      if (active && snap && (snap.store || snap.products)) {
-        setRemoteCatalog({ store: snap.store, products: snap.products });
+    setIsCatalogReady(false);
+
+    const applyIncomingCatalog = (
+      snap: { store?: StoreProfile | null; products?: Product[] | null; updatedAt?: string | null },
+      isInitial: boolean
+    ) => {
+      if (!active || (!snap.store && !snap.products)) return;
+
+      setRemoteCatalog({
+        store: snap.store ?? null,
+        products: snap.products ?? null,
+      });
+
+      if (snap.updatedAt && snap.updatedAt === lastAppliedCatalogAtRef.current) {
+        return;
       }
-    });
+
+      if (snap.updatedAt) {
+        lastAppliedCatalogAtRef.current = snap.updatedAt;
+      }
+
+      let adoptedNewerMasterSnapshot = false;
+
+      if (!isCustomerPortalActive && snap.store) {
+        let shouldAdoptStore = !isInitial || !currentUser || currentUser.role !== 'master';
+        if (isInitial && currentUser?.role === 'master') {
+          try {
+            const localSaved = localStorage.getItem(STORAGE_KEY_STORE);
+            const localUpdatedAt = Number(localStorage.getItem('kasirku_store_updated_at_v1') || '0');
+            const serverUpdatedAt = snap.updatedAt ? new Date(snap.updatedAt).getTime() : 0;
+            if (!localSaved || serverUpdatedAt > localUpdatedAt) {
+              shouldAdoptStore = true;
+              adoptedNewerMasterSnapshot = true;
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        if (shouldAdoptStore) {
+          skipNextCatalogPushRef.current = true;
+          setStore(snap.store);
+          try {
+            const serverTs = snap.updatedAt ? new Date(snap.updatedAt).getTime() : Date.now();
+            localStorage.setItem('kasirku_store_updated_at_v1', String(serverTs));
+          } catch {
+            // ignore
+          }
+        }
+      }
+
+      if (!isCustomerPortalActive && snap.products && snap.products.length > 0) {
+        if (!currentUser || currentUser.role !== 'master' || adoptedNewerMasterSnapshot) {
+          skipNextCatalogPushRef.current = true;
+          setProducts(snap.products);
+        }
+      }
+    };
+
+    void onlineOrdersManager
+      .fetchCatalogFromServer()
+      .then((snap) => {
+        if (snap) {
+          applyIncomingCatalog(snap, true);
+        }
+      })
+      .finally(() => {
+        if (active) setIsCatalogReady(true);
+      });
+
     const unsubscribe = onlineOrdersManager.subscribeCatalog((snap) => {
-      if (active && (snap.store || snap.products)) {
-        setRemoteCatalog({ store: snap.store, products: snap.products });
-      }
+      applyIncomingCatalog(snap, false);
     });
+
     return () => {
       active = false;
       unsubscribe();
     };
-  }, [isCustomerPortalActive]);
+  }, [isCustomerPortalActive, currentUser?.id, currentUser?.role]);
+
+  // Only Owner (master) pushes store/QRIS & menu catalog updates to server after initial hydration
+  useEffect(() => {
+    if (!isCatalogReady || isCustomerPortalActive || currentUser?.role !== 'master') {
+      return;
+    }
+
+    if (skipNextCatalogPushRef.current) {
+      skipNextCatalogPushRef.current = false;
+      return;
+    }
+
+    try {
+      localStorage.setItem('kasirku_store_updated_at_v1', String(Date.now()));
+    } catch {
+      // ignore
+    }
+
+    void onlineOrdersManager.syncCatalogToServer(store, products).then((synced) => {
+      if (synced?.updatedAt) {
+        lastAppliedCatalogAtRef.current = synced.updatedAt;
+      }
+      setRemoteCatalog({ store, products });
+    });
+  }, [isCatalogReady, currentUser?.role, isCustomerPortalActive, store, products]);
 
   const pendingOnlineOrdersCount = useMemo(() => {
     return onlineOrders.filter(
@@ -678,7 +786,9 @@ export default function App() {
               printerState={printerState}
               onLoadOrderToPOS={handleLoadOnlineOrderToPOS}
               onOpenCustomerView={(tbl) => {
-                void onlineOrdersManager.syncCatalogToServer(store, products);
+                if (isMaster) {
+                  void onlineOrdersManager.syncCatalogToServer(store, products);
+                }
                 setCustomerPortalTable(tbl || '');
                 setIsCustomerPortalActive(true);
               }}
@@ -689,7 +799,9 @@ export default function App() {
             <TableQRView
               store={store}
               onOpenCustomerView={(tbl) => {
-                void onlineOrdersManager.syncCatalogToServer(store, products);
+                if (isMaster) {
+                  void onlineOrdersManager.syncCatalogToServer(store, products);
+                }
                 setCustomerPortalTable(tbl || '');
                 setIsCustomerPortalActive(true);
               }}

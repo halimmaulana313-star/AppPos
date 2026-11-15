@@ -398,7 +398,11 @@ export const OnlineOrdersView: React.FC<OnlineOrdersViewProps> = ({
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredOrders.map((order) => {
-            const isPending = order.status === 'pending';
+            const isWaitingQrisPayment =
+              order.paymentPreference === 'qris_online' &&
+              order.paymentStatus !== 'paid' &&
+              order.status !== 'cancelled';
+            const isPending = order.status === 'pending' && !isWaitingQrisPayment;
             const isAccepted = order.status === 'accepted' || order.status === 'preparing';
             const isCompleted = order.status === 'completed';
             const isCancelled = order.status === 'cancelled';
@@ -407,7 +411,9 @@ export const OnlineOrdersView: React.FC<OnlineOrdersViewProps> = ({
               <div
                 key={order.id}
                 className={`bg-white rounded-2xl border p-4.5 space-y-3 shadow-xs hover:shadow-md transition-all flex flex-col justify-between ${
-                  isPending
+                  isWaitingQrisPayment
+                    ? 'border-amber-300 bg-amber-50/15'
+                    : isPending
                     ? 'border-amber-400 ring-2 ring-amber-400/20 bg-amber-50/20'
                     : isAccepted
                     ? 'border-teal-300 bg-teal-50/15'
@@ -429,7 +435,9 @@ export const OnlineOrdersView: React.FC<OnlineOrdersViewProps> = ({
                     {/* Status Badge */}
                     <span
                       className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider ${
-                        isPending
+                        isWaitingQrisPayment
+                          ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                          : isPending
                           ? 'bg-amber-100 text-amber-800 border border-amber-300 animate-pulse'
                           : isAccepted
                           ? 'bg-teal-100 text-teal-800 border border-teal-300'
@@ -438,10 +446,12 @@ export const OnlineOrdersView: React.FC<OnlineOrdersViewProps> = ({
                           : 'bg-rose-100 text-rose-800'
                       }`}
                     >
-                      {isPending
+                      {isWaitingQrisPayment
+                        ? 'Menunggu Bayar'
+                        : isPending
                         ? 'Menunggu'
                         : isAccepted
-                        ? 'Dimasak'
+                        ? 'Diproses Dapur'
                         : isCompleted
                         ? 'Selesai'
                         : 'Dibatalkan'}
@@ -458,7 +468,7 @@ export const OnlineOrdersView: React.FC<OnlineOrdersViewProps> = ({
                         </span>
                       ) : order.paymentPreference === 'qris_online' ? (
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-200">
-                          Menunggu QRIS
+                          QRIS Belum Lunas
                         </span>
                       ) : (
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-slate-100 text-slate-600 border-slate-200">
@@ -495,9 +505,19 @@ export const OnlineOrdersView: React.FC<OnlineOrdersViewProps> = ({
                     ))}
                   </div>
 
+                  {/* Waiting Payment Lock Notice */}
+                  {isWaitingQrisPayment && (
+                    <div className="text-[11px] text-amber-800 bg-amber-50 p-2.5 rounded-xl border border-amber-200 font-medium flex items-start gap-2 mt-1">
+                      <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                      <span>
+                        Menunggu pelanggan menyelesaikan pembayaran QRIS Toko. Setelah lunas, pesanan otomatis masuk ke proses dapur.
+                      </span>
+                    </div>
+                  )}
+
                   {/* Customer Note if any */}
                   {order.notes && (
-                    <div className="text-[11px] text-slate-600 bg-slate-50 p-2 rounded-xl border border-slate-200 italic">
+                    <div className="text-[11px] text-slate-600 bg-slate-50 p-2 rounded-xl border border-slate-200 italic mt-1.5">
                       Catatan: &quot;{order.notes}&quot;
                     </div>
                   )}
@@ -523,83 +543,92 @@ export const OnlineOrdersView: React.FC<OnlineOrdersViewProps> = ({
 
                   {/* Contextual Actions */}
                   <div className="grid grid-cols-2 gap-1.5 pt-1">
-                    {isPending && (
+                    {isWaitingQrisPayment ? (
                       <>
                         <button
                           type="button"
-                          onClick={() => handleAcceptOrder(order)}
+                          onClick={() => void handleVerifyQrisPaid(order)}
                           className="py-2 px-3 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1"
+                          title="Konfirmasi manual jika pelanggan sudah menunjukkan bukti bayar QRIS"
                         >
-                          <Check className="w-3.5 h-3.5" />
-                          <span>Terima & Masak</span>
+                          <QrCode className="w-3.5 h-3.5" />
+                          <span>Konfirmasi Lunas</span>
                         </button>
-
                         <button
                           type="button"
                           onClick={() => handleRejectOrder(order)}
                           className="py-2 px-3 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1"
                         >
                           <X className="w-3.5 h-3.5" />
-                          <span>Tolak</span>
+                          <span>Batalkan</span>
                         </button>
                       </>
-                    )}
-
-                    {/* For already QRIS-paid orders: prevent double charging, offer Mark Served instead */}
-                    {!isCancelled && order.paymentStatus === 'paid' ? (
-                      !isCompleted && (
-                        <button
-                          type="button"
-                          onClick={() => handleCompleteOrder(order)}
-                          className={`py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-600/20 active:scale-95 cursor-pointer flex items-center justify-center gap-1 ${
-                            isPending ? 'col-span-2' : ''
-                          }`}
-                          title="Pesanan sudah lunas QRIS — tandai selesai disajikan"
-                        >
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>Selesai Disajikan</span>
-                        </button>
-                      )
                     ) : (
-                      !isCancelled && (
-                        <>
-                          {order.paymentPreference === 'qris_online' && (
+                      <>
+                        {isPending && (
+                          <>
                             <button
                               type="button"
-                              onClick={() => void handleVerifyQrisPaid(order)}
-                              className="col-span-2 py-2 px-3 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1"
-                              title="Konfirmasi pembayaran QRIS sudah masuk"
+                              onClick={() => handleAcceptOrder(order)}
+                              className="py-2 px-3 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1"
                             >
-                              <QrCode className="w-3.5 h-3.5" />
-                              <span>Verifikasi Lunas QRIS</span>
+                              <Check className="w-3.5 h-3.5" />
+                              <span>Terima & Masak</span>
                             </button>
-                          )}
+
+                            <button
+                              type="button"
+                              onClick={() => handleRejectOrder(order)}
+                              className="py-2 px-3 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                              <span>Tolak</span>
+                            </button>
+                          </>
+                        )}
+
+                        {/* For already QRIS-paid orders: prevent double charging, offer Mark Served instead */}
+                        {!isCancelled && order.paymentStatus === 'paid' ? (
+                          !isCompleted && (
+                            <button
+                              type="button"
+                              onClick={() => handleCompleteOrder(order)}
+                              className="py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-600/20 active:scale-95 cursor-pointer flex items-center justify-center gap-1"
+                              title="Pesanan sudah lunas QRIS — tandai selesai disajikan"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>Selesai Disajikan</span>
+                            </button>
+                          )
+                        ) : (
+                          !isCancelled && (
+                            <button
+                              type="button"
+                              onClick={() => onLoadOrderToPOS(order)}
+                              className={`py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-600/20 active:scale-95 cursor-pointer flex items-center justify-center gap-1 ${
+                                isPending ? 'col-span-2' : ''
+                              }`}
+                              title="Muat pesanan ini ke keranjang kasir untuk langsung dibayar"
+                            >
+                              <CreditCard className="w-3.5 h-3.5" />
+                              <span>Muat ke Kasir & Bayar</span>
+                            </button>
+                          )
+                        )}
+
+                        {/* Print ticket */}
+                        {!isPending && !isCancelled && (
                           <button
                             type="button"
-                            onClick={() => onLoadOrderToPOS(order)}
-                            className={`py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-600/20 active:scale-95 cursor-pointer flex items-center justify-center gap-1 ${
-                              isPending || order.paymentPreference === 'qris_online' ? 'col-span-2' : ''
-                            }`}
-                            title="Muat pesanan ini ke keranjang kasir untuk langsung dibayar"
+                            onClick={() => handlePrintKitchenTicket(order)}
+                            className="py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1"
+                            title="Cetak tiket dapur via Bluetooth"
                           >
-                            <CreditCard className="w-3.5 h-3.5" />
-                            <span>Muat ke Kasir & Bayar</span>
+                            <Printer className="w-3.5 h-3.5" />
+                            <span>Cetak Dapur</span>
                           </button>
-                        </>
-                      )
-                    )}
-
-                    {/* Print ticket */}
-                    {!isPending && !isCancelled && (
-                      <button
-                        type="button"
-                        onClick={() => handlePrintKitchenTicket(order)}
-                        className="py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1"
-                        title="Cetak tiket dapur via Bluetooth"
-                      >
-                        <Printer className="w-3.5 h-3.5" />
-                        <span>Cetak Dapur</span>
-                      </button>
+                        )}
+                      </>
                     )}
 
                     {/* Delete finished or cancelled order */}
@@ -607,9 +636,7 @@ export const OnlineOrdersView: React.FC<OnlineOrdersViewProps> = ({
                       <button
                         type="button"
                         onClick={() => handleDeleteOrder(order.id)}
-                        className={`py-2 px-3 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
-                          isCancelled ? 'col-span-2' : 'col-span-2'
-                        }`}
+                        className="col-span-2 py-2 px-3 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1"
                         title="Hapus pesanan dari daftar"
                       >
                         <Trash2 className="w-3.5 h-3.5" />

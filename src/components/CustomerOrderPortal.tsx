@@ -38,7 +38,11 @@ import {
   getLocalDateString,
 } from '../utils/formatters';
 import { sounds } from '../utils/soundEffects';
-import { buildQrisPayload, downloadQRImage, generateQRCodeDataUrl } from '../utils/qrCodeGenerator';
+import {
+  downloadQRImage,
+  generateQRCodeDataUrl,
+  getStoreQrisImageDataUrl,
+} from '../utils/qrCodeGenerator';
 import { generateOrderReceiptPDF } from '../utils/receiptPdfGenerator';
 import { DEFAULT_PRINTER_CONFIG } from '../utils/initialData';
 import {
@@ -258,24 +262,18 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
     return cart.reduce((sum, item) => sum + item.quantity, 0);
   }, [cart]);
 
-  // Generate dynamic fallback QRIS image whenever store has no static QRIS image uploaded
-  const qrisTargetAmount = activeOrder ? activeOrder.total : grandTotal;
-  const qrisTargetCode = activeOrder ? activeOrder.orderCode : undefined;
+  // Resolve exact Store QRIS image (uploaded QRIS Toko or identical default Store QRIS)
   useEffect(() => {
-    if (store.qrisImageUrl) {
-      setDynamicQrisUrl(store.qrisImageUrl);
-      return;
-    }
-    const payload = buildQrisPayload({
-      merchantName: store.qrisMerchantName || store.storeName,
-      nmid: store.qrisNmid || 'ID102003004005',
-      amount: qrisTargetAmount,
-      orderCode: qrisTargetCode,
-    });
-    generateQRCodeDataUrl(payload, { width: 360, margin: 2 })
-      .then((url) => setDynamicQrisUrl(url))
+    let active = true;
+    void getStoreQrisImageDataUrl(store)
+      .then((url) => {
+        if (active) setDynamicQrisUrl(url);
+      })
       .catch((err) => console.error(err));
-  }, [store.qrisImageUrl, store.qrisMerchantName, store.storeName, store.qrisNmid, qrisTargetAmount, qrisTargetCode]);
+    return () => {
+      active = false;
+    };
+  }, [store.qrisImageUrl, store.qrisMerchantName, store.storeName, store.qrisNmid]);
 
   // Submit Order to Cashier
   const handleSubmitOrder = async () => {
@@ -412,22 +410,54 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
    * VIEW: ACTIVE ORDER CONFIRMATION & LIVE STATUS
    * ========================================================= */
   if (activeOrder) {
-    const statusSteps = [
-      { key: 'pending', label: 'Menunggu Konfirmasi', desc: 'Pesanan masuk ke kasir' },
-      { key: 'accepted', label: 'Diterima & Dimasak', desc: 'Dapur sedang memproses menu' },
-      { key: 'completed', label: 'Selesai', desc: 'Siap dinikmati / diambil' },
-    ];
-
     const isCancelled = activeOrder.status === 'cancelled';
+    const isQrisOrder = activeOrder.paymentPreference === 'qris_online';
     const isQrisPaid = activeOrder.paymentStatus === 'paid';
     const minsLeft = String(Math.floor(qrisSecondsLeft / 60)).padStart(2, '0');
     const secsLeft = String(qrisSecondsLeft % 60).padStart(2, '0');
-    const currentStepIdx =
-      activeOrder.status === 'pending'
+
+    const statusSteps = isQrisOrder
+      ? [
+          {
+            key: 'waiting_payment',
+            label: 'Menunggu Pembayaran QRIS',
+            desc: 'Selesaikan pembayaran menggunakan QRIS Toko di bawah',
+          },
+          {
+            key: 'payment_accepted',
+            label: 'Pembayaran Diterima Otomatis',
+            desc: 'Sistem otomatis memverifikasi pelunasan QRIS Anda',
+          },
+          {
+            key: 'preparing',
+            label: 'Diproses oleh Dapur',
+            desc: 'Dapur otomatis menerima & menyiapkan menu Anda',
+          },
+          {
+            key: 'completed',
+            label: 'Selesai',
+            desc: 'Pesanan siap dinikmati / diambil',
+          },
+        ]
+      : [
+          { key: 'pending', label: 'Menunggu Konfirmasi', desc: 'Pesanan masuk ke kasir' },
+          { key: 'accepted', label: 'Diterima & Dimasak', desc: 'Dapur sedang memproses menu' },
+          { key: 'completed', label: 'Selesai', desc: 'Siap dinikmati / diambil' },
+        ];
+
+    const currentStepIdx = isQrisOrder
+      ? !isQrisPaid
         ? 0
-        : activeOrder.status === 'accepted' || activeOrder.status === 'preparing' || activeOrder.status === 'ready'
-        ? 1
-        : 2;
+        : activeOrder.status === 'completed'
+        ? 3
+        : 2
+      : activeOrder.status === 'pending'
+      ? 0
+      : activeOrder.status === 'accepted' ||
+        activeOrder.status === 'preparing' ||
+        activeOrder.status === 'ready'
+      ? 1
+      : 2;
 
     return (
       <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col justify-between max-w-lg mx-auto shadow-2xl">
@@ -443,11 +473,13 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
             </div>
             <div>
               <h2 className="font-extrabold text-sm text-white truncate max-w-[200px]">{store.storeName}</h2>
-              <p className={`text-[11px] font-semibold ${isCancelled ? 'text-rose-400' : 'text-emerald-400'}`}>
+              <p className={`text-[11px] font-semibold ${isCancelled ? 'text-rose-400' : isQrisOrder && !isQrisPaid ? 'text-amber-300' : 'text-emerald-400'}`}>
                 {isCancelled
                   ? 'Pesanan Dibatalkan'
                   : isQrisPaid
-                  ? 'LUNAS • Pembayaran QRIS Terkonfirmasi'
+                  ? 'Pembayaran Diterima • Diproses Dapur'
+                  : isQrisOrder
+                  ? 'Menunggu Pembayaran QRIS Toko'
                   : 'Pemesanan Online Berhasil'}
               </p>
             </div>
@@ -474,9 +506,19 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
                 <div className="w-16 h-16 rounded-full bg-emerald-500/25 text-emerald-300 flex items-center justify-center mx-auto border-2 border-emerald-400 animate-in zoom-in duration-300">
                   <ShieldCheck className="w-9 h-9" />
                 </div>
-                <h1 className="text-xl font-black text-white">Pembayaran QRIS Berhasil!</h1>
+                <h1 className="text-xl font-black text-white">Pembayaran Diterima & Diproses Dapur!</h1>
                 <p className="text-xs text-emerald-300 max-w-xs mx-auto font-medium">
-                  Transaksi LUNAS otomatis tercatat di kasir {store.storeName}. Pesanan Anda sedang disiapkan.
+                  Pembayaran QRIS Anda telah LUNAS otomatis. Dapur {store.storeName} sedang menyiapkan pesanan Anda.
+                </p>
+              </>
+            ) : isQrisOrder ? (
+              <>
+                <div className="w-16 h-16 rounded-full bg-amber-500/20 text-amber-300 flex items-center justify-center mx-auto border-2 border-amber-400/50 animate-pulse">
+                  <Clock className="w-9 h-9" />
+                </div>
+                <h1 className="text-xl font-black text-white">Menunggu Pembayaran QRIS</h1>
+                <p className="text-xs text-slate-300 max-w-xs mx-auto">
+                  Scan QRIS Toko di bawah ini. Pesanan akan otomatis diterima & diteruskan ke dapur begitu Anda selesai membayar.
                 </p>
               </>
             ) : (
@@ -484,15 +526,9 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
                 <div className="w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto border-2 border-emerald-500/40 animate-in zoom-in duration-300">
                   <CheckCircle2 className="w-9 h-9" />
                 </div>
-                <h1 className="text-xl font-black text-white">
-                  {activeOrder.paymentPreference === 'qris_online'
-                    ? 'Silakan Selesaikan Pembayaran QRIS'
-                    : 'Pesanan Anda Terkirim!'}
-                </h1>
+                <h1 className="text-xl font-black text-white">Pesanan Anda Terkirim!</h1>
                 <p className="text-xs text-slate-400 max-w-xs mx-auto">
-                  {activeOrder.paymentPreference === 'qris_online'
-                    ? 'Scan QRIS di bawah ini lalu klik tombol verifikasi agar pembayaran otomatis masuk ke kasir.'
-                    : `Pesanan telah otomatis masuk ke sistem kasir ${store.storeName}.`}
+                  Pesanan telah otomatis masuk ke sistem kasir {store.storeName}.
                 </p>
               </>
             )}
@@ -694,18 +730,18 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
                   {isVerifyingQris ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Memverifikasi Pembayaran QRIS...</span>
+                      <span>Menerima Pembayaran & Mengirim ke Dapur...</span>
                     </>
                   ) : (
                     <>
                       <CheckCircle2 className="w-4 h-4" />
-                      <span>Saya Sudah Scan • Bayar & Verifikasi Otomatis</span>
+                      <span>Selesai Bayar • Terima & Proses ke Dapur</span>
                     </>
                   )}
                 </button>
 
                 <p className="text-[11px] text-slate-500 leading-relaxed">
-                  Scan QRIS di atas via GoPay, OVO, Dana, ShopeePay, BCA, atau m-Banking lalu tekan tombol verifikasi agar transaksi langsung LUNAS di kasir.
+                  Gunakan barcode QRIS Toko di atas via GoPay, OVO, Dana, ShopeePay, BCA, atau m-Banking. Pesanan menunggu sampai pembayaran selesai sebelum diproses oleh dapur.
                 </p>
               </div>
             )
@@ -715,15 +751,17 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
           <div className="bg-slate-800/80 rounded-2xl p-4 border border-slate-700 space-y-3">
             <div className="flex items-center justify-between text-xs font-bold text-slate-300">
               <span>Status Pesanan</span>
-              <span className={`text-[11px] font-mono ${isCancelled ? 'text-rose-400' : 'text-emerald-400'}`}>
-                {activeOrder.status === 'pending'
+              <span className={`text-[11px] font-mono ${isCancelled ? 'text-rose-400' : isQrisOrder && !isQrisPaid ? 'text-amber-300' : 'text-emerald-400'}`}>
+                {isCancelled
+                  ? 'Dibatalkan'
+                  : isQrisOrder && !isQrisPaid
+                  ? 'Menunggu Pembayaran QRIS'
+                  : activeOrder.status === 'pending'
                   ? 'Menunggu Konfirmasi'
-                  : activeOrder.status === 'accepted'
-                  ? 'Diterima Kasir'
+                  : activeOrder.status === 'accepted' || activeOrder.status === 'preparing'
+                  ? 'Diproses Dapur'
                   : activeOrder.status === 'completed'
                   ? 'Selesai'
-                  : activeOrder.status === 'cancelled'
-                  ? 'Dibatalkan'
                   : 'Diproses'}
               </span>
             </div>
@@ -1316,7 +1354,7 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
                   <div className="bg-white rounded-2xl p-3.5 border-2 border-emerald-300 shadow-xs text-center space-y-2.5 animate-in fade-in duration-200">
                     <div className="bg-red-600 text-white rounded-lg py-1 px-2.5 flex items-center justify-between">
                       <span className="font-extrabold text-[11px] tracking-wider">QRIS</span>
-                      <span className="text-[9px] font-semibold opacity-95">PEMBAYARAN NASIONAL</span>
+                      <span className="text-[9px] font-semibold opacity-95">QRIS RESMI TOKO</span>
                     </div>
 
                     <div>
@@ -1387,7 +1425,7 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
                     </div>
 
                     <p className="text-[10px] text-slate-500 leading-relaxed">
-                      Klik tombol di bawah untuk membuat pesanan dan langsung menyelesaikan pembayaran QRIS otomatis di layar berikutnya.
+                      Barcode di atas sama dengan QRIS Toko di kasir. Setelah Anda menyelesaikan pembayaran QRIS, pesanan otomatis diterima dan langsung diproses oleh dapur.
                     </p>
                   </div>
                 )}

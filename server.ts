@@ -251,7 +251,7 @@ async function startServer() {
       paidAt: now,
       paymentReference,
       posOrderId,
-      status: existingOrder.status === 'pending' ? 'accepted' : existingOrder.status,
+      status: existingOrder.status === 'completed' ? 'completed' : 'preparing',
       acceptedAt: existingOrder.acceptedAt || now,
     };
 

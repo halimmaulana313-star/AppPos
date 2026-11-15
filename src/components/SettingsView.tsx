@@ -35,6 +35,7 @@ import { BluetoothPrinterState } from '../utils/bluetoothThermalPrinter';
 import { getLocalDateString } from '../utils/formatters';
 import { DEFAULT_STORE_PROFILE, INITIAL_PRODUCTS, getInitialOrders } from '../utils/initialData';
 import { PRESET_LOGOS } from '../utils/presetLogos';
+import { getStoreQrisImageDataUrl } from '../utils/qrCodeGenerator';
 import { sounds } from '../utils/soundEffects';
 
 interface SettingsViewProps {
@@ -75,10 +76,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [showPresetPicker, setShowPresetPicker] = useState(false);
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
   const [backupFeedback, setBackupFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [previewStoreQrisUrl, setPreviewStoreQrisUrl] = useState<string>('');
 
   useEffect(() => {
     setFormData({ ...store });
   }, [store]);
+
+  useEffect(() => {
+    let active = true;
+    void getStoreQrisImageDataUrl(formData)
+      .then((url) => {
+        if (active) setPreviewStoreQrisUrl(url);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [formData.qrisImageUrl, formData.qrisMerchantName, formData.storeName, formData.qrisNmid]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -514,8 +528,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 {formData.qrisImageUrl && (
                   <button
                     type="button"
-                    onClick={() => setFormData({ ...formData, qrisImageUrl: undefined })}
-                    className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-800 font-semibold"
+                    onClick={() => {
+                      setFormData((prev) => ({ ...prev, qrisImageUrl: undefined }));
+                      setStore((prev) => ({ ...prev, qrisImageUrl: undefined }));
+                      sounds.playError();
+                    }}
+                    className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-800 font-semibold cursor-pointer"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                     <span>Hapus QRIS</span>
@@ -544,7 +562,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                             if (file) {
                               const reader = new FileReader();
                               reader.onload = (ev) => {
-                                setFormData({ ...formData, qrisImageUrl: ev.target?.result as string });
+                                const imgUrl = ev.target?.result as string;
+                                if (imgUrl) {
+                                  setFormData((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
+                                  setStore((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
+                                  sounds.playItemBeep();
+                                }
                               };
                               reader.readAsDataURL(file);
                             }
@@ -553,28 +576,42 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       </label>
                     </div>
                   ) : (
-                    <label className="w-full border-2 border-dashed border-teal-300 hover:border-teal-500 bg-white p-5 rounded-2xl flex flex-col items-center justify-center cursor-pointer transition-colors text-center group">
-                      <div className="w-10 h-10 rounded-full bg-teal-50 text-teal-600 flex items-center justify-center mb-2 group-hover:scale-105 transition-transform">
-                        <Upload className="w-5 h-5" />
-                      </div>
-                      <span className="text-xs font-bold text-slate-800">Unggah Foto QRIS</span>
-                      <span className="text-[10px] text-slate-400 mt-0.5">PNG, JPG, WEBP (Maks 5MB)</span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) {
-                            const reader = new FileReader();
-                            reader.onload = (ev) => {
-                              setFormData({ ...formData, qrisImageUrl: ev.target?.result as string });
-                            };
-                            reader.readAsDataURL(file);
-                          }
-                        }}
-                      />
-                    </label>
+                    <div className="w-full max-w-[220px] bg-white p-3 rounded-2xl border border-teal-200 shadow-xs text-center space-y-2">
+                      {previewStoreQrisUrl && (
+                        <img
+                          src={previewStoreQrisUrl}
+                          alt="QRIS Digital Toko"
+                          className="w-36 h-36 object-contain mx-auto rounded-lg border border-slate-100"
+                        />
+                      )}
+                      <span className="inline-block px-2 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-200 text-[10px] font-bold">
+                        QRIS Digital Toko Aktif
+                      </span>
+                      <label className="w-full border border-dashed border-teal-400 hover:border-teal-600 bg-teal-50/50 hover:bg-teal-50 py-2 px-3 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition-colors text-xs font-bold text-teal-800">
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>Unggah Foto QRIS Toko</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              const reader = new FileReader();
+                              reader.onload = (ev) => {
+                                const imgUrl = ev.target?.result as string;
+                                if (imgUrl) {
+                                  setFormData((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
+                                  setStore((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
+                                  sounds.playItemBeep();
+                                }
+                              };
+                              reader.readAsDataURL(file);
+                            }
+                          }}
+                        />
+                      </label>
+                    </div>
                   )}
                 </div>
 
@@ -607,7 +644,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
 
                   <p className="text-[11px] text-teal-800 bg-teal-100/60 p-2.5 rounded-xl">
-                    💡 Pelanggan cukup mengarahkan kamera HP ke QRIS ini saat membayar di kasir.
+                    💡 Barcode QRIS Toko ini otomatis dipakai secara identik baik di layar Kasir maupun di Portal Pemesanan Online pelanggan.
                   </p>
                 </div>
               </div>

@@ -78,7 +78,7 @@ function tlv(tag: string, value: string): string {
 }
 
 /**
- * Build an EMVCo QRIS payload with merchant info and nominal amount
+ * Build an EMVCo QRIS payload with merchant info and optional nominal amount
  */
 export function buildQrisPayload(params: {
   merchantName: string;
@@ -95,7 +95,7 @@ export function buildQrisPayload(params: {
 
   const body =
     tlv('00', '01') +
-    tlv('01', '12') +
+    tlv('01', amountStr !== '0' ? '12' : '11') +
     tlv('26', mai) +
     tlv('52', '5812') +
     tlv('53', '360') +
@@ -107,6 +107,27 @@ export function buildQrisPayload(params: {
     '6304';
 
   return body + crc16Ccitt(body);
+}
+
+/**
+ * Resolve the store's exact QRIS barcode image URL so Cashier POS, Store Settings,
+ * and Customer Online Portal always display the identical QRIS Toko barcode.
+ */
+export async function getStoreQrisImageDataUrl(store: {
+  qrisImageUrl?: string;
+  qrisMerchantName?: string;
+  storeName: string;
+  qrisNmid?: string;
+}): Promise<string> {
+  if (store.qrisImageUrl) {
+    return store.qrisImageUrl;
+  }
+  const payload = buildQrisPayload({
+    merchantName: store.qrisMerchantName || store.storeName,
+    nmid: store.qrisNmid || 'ID102003004005',
+    amount: 0,
+  });
+  return generateQRCodeDataUrl(payload, { width: 360, margin: 2 });
 }
 
 /**

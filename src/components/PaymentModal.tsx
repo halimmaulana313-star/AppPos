@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { CartItem, PaymentMethod, PrinterConfig, StoreProfile } from '../types/pos';
 import { formatNumber, formatRupiah } from '../utils/formatters';
+import { getStoreQrisImageDataUrl } from '../utils/qrCodeGenerator';
 import { sounds } from '../utils/soundEffects';
 
 interface PaymentModalProps {
@@ -85,7 +86,20 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   const [showKeypad, setShowKeypad] = useState<boolean>(true);
   const [isQrisEnlarged, setIsQrisEnlarged] = useState<boolean>(false);
   const [confirmRemoveQris, setConfirmRemoveQris] = useState<boolean>(false);
+  const [resolvedQrisUrl, setResolvedQrisUrl] = useState<string>(store.qrisImageUrl || '');
   const qrisFileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    void getStoreQrisImageDataUrl(store)
+      .then((url) => {
+        if (active) setResolvedQrisUrl(url);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [store.qrisImageUrl, store.qrisMerchantName, store.storeName, store.qrisNmid]);
 
   useEffect(() => {
     if (isOpen) {
@@ -474,8 +488,8 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                 className="hidden"
               />
 
-              {store.qrisImageUrl ? (
-                /* Display Uploaded QRIS */
+              {resolvedQrisUrl ? (
+                /* Display Unified Store QRIS (Uploaded or Store Default) */
                 <div className="w-full flex flex-col items-center">
                   <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 w-full max-w-xs relative group">
                     {/* Header banner like genuine Indonesian QRIS */}
@@ -501,7 +515,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                       title="Klik untuk memperbesar QRIS"
                     >
                       <img
-                        src={store.qrisImageUrl}
+                        src={resolvedQrisUrl}
                         alt="QRIS Toko"
                         className="w-full max-h-[220px] object-contain"
                       />
@@ -523,11 +537,11 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                   </div>
 
                   {/* Actions for QRIS */}
-                  <div className="flex items-center gap-2 mt-2.5">
+                  <div className="flex flex-wrap items-center justify-center gap-2 mt-2.5">
                     <button
                       type="button"
                       onClick={() => setIsQrisEnlarged(true)}
-                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-colors"
+                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-colors cursor-pointer"
                     >
                       <Maximize2 className="w-3.5 h-3.5" />
                       <span>Perbesar QR</span>
@@ -538,86 +552,50 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                         <button
                           type="button"
                           onClick={() => qrisFileInputRef.current?.click()}
-                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-700 text-xs font-semibold border border-teal-200 transition-colors"
+                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-700 text-xs font-semibold border border-teal-200 transition-colors cursor-pointer"
                         >
                           <Upload className="w-3.5 h-3.5" />
-                          <span>Ganti Gambar</span>
+                          <span>{store.qrisImageUrl ? 'Ganti Gambar' : 'Unggah Foto QRIS'}</span>
                         </button>
 
-                        {confirmRemoveQris ? (
-                          <div className="flex items-center gap-1 bg-rose-50 border border-rose-200 rounded-lg px-2 py-1">
+                        {store.qrisImageUrl && (
+                          confirmRemoveQris ? (
+                            <div className="flex items-center gap-1 bg-rose-50 border border-rose-200 rounded-lg px-2 py-1">
+                              <button
+                                type="button"
+                                onClick={handleRemoveQris}
+                                className="text-[11px] font-bold text-rose-700 hover:text-rose-900 cursor-pointer"
+                              >
+                                Hapus?
+                              </button>
+                              <span className="text-slate-300">|</span>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmRemoveQris(false)}
+                                className="text-[11px] font-semibold text-slate-500 hover:text-slate-700 cursor-pointer"
+                              >
+                                Batal
+                              </button>
+                            </div>
+                          ) : (
                             <button
                               type="button"
-                              onClick={handleRemoveQris}
-                              className="text-[11px] font-bold text-rose-700 hover:text-rose-900 cursor-pointer"
+                              onClick={() => setConfirmRemoveQris(true)}
+                              className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                              title="Hapus gambar QRIS khusus"
                             >
-                              Hapus?
+                              <Trash2 className="w-3.5 h-3.5" />
                             </button>
-                            <span className="text-slate-300">|</span>
-                            <button
-                              type="button"
-                              onClick={() => setConfirmRemoveQris(false)}
-                              className="text-[11px] font-semibold text-slate-500 hover:text-slate-700 cursor-pointer"
-                            >
-                              Batal
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setConfirmRemoveQris(true)}
-                            className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                            title="Hapus gambar QRIS"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          )
                         )}
                       </>
                     )}
                   </div>
                 </div>
               ) : (
-                /* No QRIS Uploaded Yet - Prompt to Upload */
-                <div className="w-full max-w-sm flex flex-col items-center py-2 space-y-3">
-                  <div className="w-14 h-14 rounded-2xl bg-teal-50 border border-teal-200 text-teal-600 flex items-center justify-center">
-                    <QrCode className="w-8 h-8" />
-                  </div>
-
-                  <div>
-                    <h4 className="font-bold text-sm text-slate-800">
-                      {isMaster ? 'Unggah Gambar QRIS Toko' : 'QRIS Toko Belum Diunggah'}
-                    </h4>
-                    <p className="text-xs text-slate-500 max-w-xs mt-0.5">
-                      {isMaster
-                        ? 'Masukkan barcode/foto QRIS toko Anda agar pelanggan dapat scan langsung di layar saat bayar.'
-                        : 'Gambar barcode QRIS toko belum diatur oleh Master Toko. Hubungi pemilik toko untuk mengunggah barcode QRIS.'}
-                    </p>
-                  </div>
-
-                  <div className="bg-white p-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-800">
-                    Total Tagihan: {formatRupiah(total)}
-                  </div>
-
-                  {isMaster ? (
-                    <button
-                      type="button"
-                      onClick={() => qrisFileInputRef.current?.click()}
-                      className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs shadow-md transition-all active:scale-[0.98]"
-                    >
-                      <Upload className="w-4 h-4" />
-                      <span>Pilih Foto QRIS dari Perangkat (PNG/JPG)</span>
-                    </button>
-                  ) : (
-                    <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-3 py-2 rounded-xl">
-                      🔒 Akun Kasir tidak memiliki akses untuk mengunggah gambar QRIS.
-                    </div>
-                  )}
-
-                  {isMaster && (
-                    <p className="text-[11px] text-slate-400">
-                      Foto yang diunggah akan otomatis disimpan untuk setiap transaksi QRIS selanjutnya.
-                    </p>
-                  )}
+                <div className="w-full max-w-sm flex flex-col items-center py-4 space-y-2 text-xs text-slate-500">
+                  <QrCode className="w-8 h-8 text-teal-600 animate-pulse" />
+                  <span>Menyiapkan QRIS Toko...</span>
                 </div>
               )}
             </div>
@@ -686,7 +664,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
       </div>
 
       {/* Enlarged QRIS Pop-up for Customer Scan */}
-      {isQrisEnlarged && store.qrisImageUrl && (
+      {isQrisEnlarged && resolvedQrisUrl && (
         <div
           onClick={() => setIsQrisEnlarged(false)}
           className="fixed inset-0 z-60 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
@@ -713,7 +691,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
             <div className="my-3 p-2 bg-white rounded-2xl border-2 border-slate-200 flex items-center justify-center">
               <img
-                src={store.qrisImageUrl}
+                src={resolvedQrisUrl}
                 alt="QRIS Toko Full"
                 className="w-full max-h-[340px] object-contain rounded-xl"
               />

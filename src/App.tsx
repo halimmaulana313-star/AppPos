@@ -282,6 +282,7 @@ export default function App() {
         return [...trulyNew, ...prev];
       });
 
+      sounds.playOrderNotification();
       sounds.playCashRegister();
 
       if (latestPaid) {
@@ -306,7 +307,11 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onlineOrdersManager.subscribe((orders, newOrder) => {
       setOnlineOrders(orders);
-      if (newOrder && newOrder.status === 'pending') {
+      if (
+        newOrder &&
+        newOrder.status === 'pending' &&
+        (newOrder.paymentPreference !== 'qris_online' || newOrder.paymentStatus === 'paid')
+      ) {
         sounds.playOrderNotification();
         setNewOrderToast(newOrder);
         setTimeout(() => setNewOrderToast(null), 8000);
@@ -358,7 +363,11 @@ export default function App() {
   }, [isCustomerPortalActive]);
 
   const pendingOnlineOrdersCount = useMemo(() => {
-    return onlineOrders.filter((o) => o.status === 'pending').length;
+    return onlineOrders.filter(
+      (o) =>
+        o.status === 'pending' &&
+        (o.paymentPreference !== 'qris_online' || o.paymentStatus === 'paid')
+    ).length;
   }, [onlineOrders]);
 
   const handleLoadOnlineOrderToPOS = (onlineOrder: OnlineOrder) => {
@@ -669,6 +678,7 @@ export default function App() {
               printerState={printerState}
               onLoadOrderToPOS={handleLoadOnlineOrderToPOS}
               onOpenCustomerView={(tbl) => {
+                void onlineOrdersManager.syncCatalogToServer(store, products);
                 setCustomerPortalTable(tbl || '');
                 setIsCustomerPortalActive(true);
               }}
@@ -679,6 +689,7 @@ export default function App() {
             <TableQRView
               store={store}
               onOpenCustomerView={(tbl) => {
+                void onlineOrdersManager.syncCatalogToServer(store, products);
                 setCustomerPortalTable(tbl || '');
                 setIsCustomerPortalActive(true);
               }}
@@ -934,7 +945,7 @@ export default function App() {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
               <CheckCircle2 className="w-3.5 h-3.5 text-teal-300 shrink-0" />
-              <span className="text-xs font-black text-teal-300">Pembayaran QRIS Lunas!</span>
+              <span className="text-xs font-black text-teal-300">QRIS Diterima • Proses Dapur!</span>
               <span className="text-[10px] bg-emerald-900 text-emerald-100 font-mono px-1 rounded">
                 #{qrisPaidToast.order.orderCode}
               </span>
@@ -943,7 +954,7 @@ export default function App() {
               {qrisPaidToast.order.customerName} • {formatRupiah(qrisPaidToast.order.total)}
             </p>
             <span className="text-[11px] text-emerald-300 font-mono font-semibold block truncate">
-              Otomatis tercatat di Riwayat & Laporan
+              Lunas & otomatis diteruskan ke Dapur
             </span>
           </div>
           <button

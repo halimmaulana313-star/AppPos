@@ -186,48 +186,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({ store, users, onLogin }) =
                 </>
               )}
             </button>
-
-            {/* Quick Demo Login Credentials */}
-            <div className="pt-3 border-t border-slate-700/60 mt-4 space-y-2">
-              <span className="text-[11px] font-semibold text-slate-400 block text-center">
-                Pilih Akun Cepat (Uji Coba):
-              </span>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEmail('kopiliterasi12@gmail.com');
-                    setPassword('literasi03');
-                    setErrorMessage('');
-                  }}
-                  className="p-2 rounded-xl bg-slate-900/90 hover:bg-slate-700/80 border border-amber-500/40 text-left transition-all cursor-pointer group"
-                >
-                  <span className="text-[11px] font-black text-amber-400 block group-hover:text-amber-300">
-                    👑 Owner / Master
-                  </span>
-                  <span className="text-[9px] text-slate-400 font-mono block truncate">
-                    kopiliterasi12@...
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEmail('kasir@kopiliterasi.id');
-                    setPassword('kasir123');
-                    setErrorMessage('');
-                  }}
-                  className="p-2 rounded-xl bg-slate-900/90 hover:bg-slate-700/80 border border-emerald-500/40 text-left transition-all cursor-pointer group"
-                >
-                  <span className="text-[11px] font-black text-emerald-400 block group-hover:text-emerald-300">
-                    👤 Staf Kasir
-                  </span>
-                  <span className="text-[9px] text-slate-400 font-mono block truncate">
-                    kasir@kopiliterasi.id
-                  </span>
-                </button>
-              </div>
-            </div>
           </form>
         </div>
 

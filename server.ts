@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import type { Request, Response } from 'express';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import type { OnlineOrder, OnlineOrderStatus, Order, Product, StoreProfile } from './src/types/pos';
 
@@ -95,6 +96,7 @@ const VALID_STATUSES: OnlineOrderStatus[] = [
 
 async function startServer() {
   const app = express();
+  const httpServer = http.createServer(app);
 
   app.use(express.json({ limit: '15mb' }));
 
@@ -402,13 +404,19 @@ async function startServer() {
   } else {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        allowedHosts: true,
+        ws: {
+          server: httpServer,
+        },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`[POS Server] Berjalan di http://0.0.0.0:${PORT} (${IS_PRODUCTION ? 'production' : 'development'})`);
   });
 }

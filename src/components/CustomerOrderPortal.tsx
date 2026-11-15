@@ -9,13 +9,18 @@ import {
   ArrowLeft,
   CheckCircle2,
   Clock,
+  Download,
   Edit3,
+  FileDown,
   Flame,
+  Loader2,
+  Maximize2,
   Minus,
   Plus,
   QrCode,
   Search,
   Send,
+  ShieldCheck,
   ShoppingBag,
   Sparkles,
   Store,
@@ -24,10 +29,18 @@ import {
   X,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { CartItem, OnlineOrder, Product, StoreProfile } from '../types/pos';
-import { formatNumber, formatRupiah, formatTimeOnly } from '../utils/formatters';
+import { CartItem, OnlineOrder, Order, PrinterConfig, Product, StoreProfile } from '../types/pos';
+import {
+  formatDateTime,
+  formatNumber,
+  formatRupiah,
+  formatTimeOnly,
+  getLocalDateString,
+} from '../utils/formatters';
 import { sounds } from '../utils/soundEffects';
-import { generateQRCodeDataUrl } from '../utils/qrCodeGenerator';
+import { buildQrisPayload, downloadQRImage, generateQRCodeDataUrl } from '../utils/qrCodeGenerator';
+import { generateOrderReceiptPDF } from '../utils/receiptPdfGenerator';
+import { DEFAULT_PRINTER_CONFIG } from '../utils/initialData';
 import {
   onlineOrdersManager,
   STORAGE_KEY_CUSTOMER_ACTIVE_ORDER,
@@ -36,6 +49,7 @@ import {
 interface CustomerOrderPortalProps {
   products: Product[];
   store: StoreProfile;
+  printerConfig?: PrinterConfig;
   initialTable?: string;
   onExitPortal?: () => void;
 }
@@ -43,6 +57,7 @@ interface CustomerOrderPortalProps {
 export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
   products,
   store,
+  printerConfig = DEFAULT_PRINTER_CONFIG,
   initialTable = '',
   onExitPortal,
 }) => {
@@ -56,6 +71,11 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
   const [orderNotes, setOrderNotes] = useState<string>('');
   const [paymentPreference, setPaymentPreference] = useState<'pay_at_cashier' | 'qris_online'>('pay_at_cashier');
   const [formError, setFormError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isVerifyingQris, setIsVerifyingQris] = useState<boolean>(false);
+  const [qrisPayError, setQrisPayError] = useState<string | null>(null);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
+  const [qrisSecondsLeft, setQrisSecondsLeft] = useState<number>(900);
 
   // Modals & Drawers
   const [isCartDrawerOpen, setIsCartDrawerOpen] = useState<boolean>(false);
@@ -69,6 +89,12 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
   // Active Submitted Order state
   const [activeOrder, setActiveOrder] = useState<OnlineOrder | null>(null);
   const [orderQrDataUrl, setOrderQrDataUrl] = useState<string>('');
+  const [dynamicQrisUrl, setDynamicQrisUrl] = useState<string>('');
+  const [enlargedQrisModal, setEnlargedQrisModal] = useState<{
+    imageUrl: string;
+    amount: number;
+    label?: string;
+  } | null>(null);
 
   // Check existing active order on mount
   useEffect(() => {
@@ -87,14 +113,22 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
     }
   }, []);
 
-  // Listen to order status updates in real-time
+  // Listen to order status & paymentStatus updates in real-time
   useEffect(() => {
     const unsubscribe = onlineOrdersManager.subscribe((orders) => {
       if (activeOrder) {
         const match = orders.find((o) => o.id === activeOrder.id);
-        if (match && match.status !== activeOrder.status) {
+        if (
+          match &&
+          (match.status !== activeOrder.status ||
+            match.paymentStatus !== activeOrder.paymentStatus ||
+            match.paymentReference !== activeOrder.paymentReference)
+        ) {
           setActiveOrder(match);
-          if (match.status === 'accepted') {
+          if (match.paymentStatus === 'paid' && activeOrder.paymentStatus !== 'paid') {
+            sounds.playCashRegister();
+            confetti({ particleCount: 90, spread: 70, origin: { y: 0.65 } });
+          } else if (match.status === 'accepted') {
             sounds.playItemBeep();
           } else if (match.status === 'completed') {
             sounds.playCashRegister();
@@ -103,6 +137,32 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
       }
     });
     return () => unsubscribe();
+  }, [activeOrder]);
+
+  // Live 15-minute payment countdown for unpaid QRIS orders
+  useEffect(() => {
+    if (
+      !activeOrder ||
+      activeOrder.paymentPreference !== 'qris_online' ||
+      activeOrder.paymentStatus === 'paid' ||
+      activeOrder.status === 'cancelled'
+    ) {
+      return;
+    }
+
+    const computeRemaining = () => {
+      const elapsedSec = Math.floor(
+        (Date.now() - new Date(activeOrder.timestamp).getTime()) / 1000
+      );
+      return Math.max(0, 15 * 60 - elapsedSec);
+    };
+
+    setQrisSecondsLeft(computeRemaining());
+    const timer = window.setInterval(() => {
+      setQrisSecondsLeft(computeRemaining());
+    }, 1000);
+
+    return () => window.clearInterval(timer);
   }, [activeOrder]);
 
   // Generate QR for active order code
@@ -198,26 +258,47 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
     return cart.reduce((sum, item) => sum + item.quantity, 0);
   }, [cart]);
 
+  // Generate dynamic fallback QRIS image whenever store has no static QRIS image uploaded
+  const qrisTargetAmount = activeOrder ? activeOrder.total : grandTotal;
+  const qrisTargetCode = activeOrder ? activeOrder.orderCode : undefined;
+  useEffect(() => {
+    if (store.qrisImageUrl) {
+      setDynamicQrisUrl(store.qrisImageUrl);
+      return;
+    }
+    const payload = buildQrisPayload({
+      merchantName: store.qrisMerchantName || store.storeName,
+      nmid: store.qrisNmid || 'ID102003004005',
+      amount: qrisTargetAmount,
+      orderCode: qrisTargetCode,
+    });
+    generateQRCodeDataUrl(payload, { width: 360, margin: 2 })
+      .then((url) => setDynamicQrisUrl(url))
+      .catch((err) => console.error(err));
+  }, [store.qrisImageUrl, store.qrisMerchantName, store.storeName, store.qrisNmid, qrisTargetAmount, qrisTargetCode]);
+
   // Submit Order to Cashier
-  const handleSubmitOrder = () => {
-    if (cart.length === 0) return;
+  const handleSubmitOrder = async () => {
+    if (cart.length === 0 || isSubmitting) return;
     if (!customerName.trim()) {
       setFormError('Silakan masukkan nama pemesan terlebih dahulu.');
       sounds.playError();
       return;
     }
     if (orderType === 'dine_in' && !tableNumber.trim()) {
-      setFormError('Silakan masukkan nomor meja Anda.');
+      setFormError('Silakan masukkan nomor meja atau pilih mode Bawa Pulang.');
       sounds.playError();
       return;
     }
     setFormError(null);
+    setIsSubmitting(true);
 
     const now = new Date();
-    const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+    const dateStr = getLocalDateString(now).replace(/-/g, '');
     const existingOrders = onlineOrdersManager.getOrders();
     const orderNumber = existingOrders.length + 1;
-    const orderId = `ONL-${dateStr}-${String(orderNumber).padStart(3, '0')}`;
+    const uniqueSuffix = Math.random().toString(36).slice(2, 6).toUpperCase();
+    const orderId = `ONL-${dateStr}-${String(orderNumber).padStart(3, '0')}-${uniqueSuffix}`;
     const orderCode = onlineOrdersManager.generateOrderCode(
       orderType === 'dine_in' ? tableNumber : undefined,
       orderNumber
@@ -239,10 +320,19 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
       status: 'pending',
       notes: orderNotes.trim() || undefined,
       paymentPreference,
+      paymentStatus: paymentPreference === 'qris_online' ? 'waiting_payment' : 'unpaid',
     };
 
-    // Save & broadcast to cashier
-    onlineOrdersManager.addOrder(newOrder);
+    // Save & send to server so cashier POS receives it in real time
+    const result = await onlineOrdersManager.addOrder(newOrder);
+    setIsSubmitting(false);
+
+    if (!result.ok) {
+      sounds.playError();
+      setFormError(result.error || 'Gagal mengirim pesanan ke server kasir. Silakan coba lagi.');
+      return;
+    }
+
     sounds.playCashRegister();
     confetti({
       particleCount: 70,
@@ -250,9 +340,72 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
       origin: { y: 0.7 },
     });
 
+    setQrisPayError(null);
     setActiveOrder(newOrder);
     setCart([]);
     setIsCartDrawerOpen(false);
+  };
+
+  // Automated QRIS Payment Settlement triggered directly in portal
+  const handleConfirmAutomatedQrisPayment = async () => {
+    if (!activeOrder || isVerifyingQris || activeOrder.paymentStatus === 'paid') return;
+    setQrisPayError(null);
+    setIsVerifyingQris(true);
+
+    // Brief realistic verification pulse
+    await new Promise((r) => setTimeout(r, 700));
+    const res = await onlineOrdersManager.payOrderWithQris(activeOrder.id);
+    setIsVerifyingQris(false);
+
+    if (!res.ok || !res.order) {
+      sounds.playError();
+      setQrisPayError(res.error || 'Pembayaran QRIS belum dapat diverifikasi. Coba lagi.');
+      return;
+    }
+
+    setActiveOrder(res.order);
+    setEnlargedQrisModal(null);
+    sounds.playCashRegister();
+    confetti({
+      particleCount: 100,
+      spread: 75,
+      origin: { y: 0.6 },
+    });
+  };
+
+  // Download paid QRIS e-receipt as PDF
+  const handleDownloadPaidReceiptPdf = async (paidOrder: OnlineOrder) => {
+    if (isGeneratingPdf) return;
+    setIsGeneratingPdf(true);
+    try {
+      const pdfOrder: Order = {
+        id: paidOrder.posOrderId || `ORD-QRIS-${paidOrder.id}`,
+        orderNumber: 1,
+        timestamp: paidOrder.paidAt || paidOrder.timestamp,
+        cashierName: 'QRIS Online Portal',
+        customerName: paidOrder.customerName,
+        tableNumber: paidOrder.tableNumber,
+        orderType: paidOrder.orderType,
+        items: paidOrder.items,
+        subtotal: paidOrder.subtotal,
+        discount: 0,
+        discountPercent: 0,
+        taxRate: store.enableTax ? store.taxPercentage / 100 : 0,
+        taxAmount: paidOrder.taxAmount,
+        serviceChargeRate: store.enableServiceCharge ? store.serviceChargePercentage / 100 : 0,
+        serviceChargeAmount: paidOrder.serviceChargeAmount,
+        total: paidOrder.total,
+        paymentMethod: 'qris',
+        amountPaid: paidOrder.total,
+        change: 0,
+        status: 'completed',
+        notes: paidOrder.paymentReference ? `Ref: ${paidOrder.paymentReference}` : undefined,
+      };
+      await generateOrderReceiptPDF(pdfOrder, store, printerConfig);
+      sounds.playItemBeep();
+    } finally {
+      setIsGeneratingPdf(false);
+    }
   };
 
   /* =========================================================
@@ -266,6 +419,9 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
     ];
 
     const isCancelled = activeOrder.status === 'cancelled';
+    const isQrisPaid = activeOrder.paymentStatus === 'paid';
+    const minsLeft = String(Math.floor(qrisSecondsLeft / 60)).padStart(2, '0');
+    const secsLeft = String(qrisSecondsLeft % 60).padStart(2, '0');
     const currentStepIdx =
       activeOrder.status === 'pending'
         ? 0
@@ -288,7 +444,11 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
             <div>
               <h2 className="font-extrabold text-sm text-white truncate max-w-[200px]">{store.storeName}</h2>
               <p className={`text-[11px] font-semibold ${isCancelled ? 'text-rose-400' : 'text-emerald-400'}`}>
-                {isCancelled ? 'Pesanan Dibatalkan' : 'Pemesanan Online Berhasil'}
+                {isCancelled
+                  ? 'Pesanan Dibatalkan'
+                  : isQrisPaid
+                  ? 'LUNAS • Pembayaran QRIS Terkonfirmasi'
+                  : 'Pemesanan Online Berhasil'}
               </p>
             </div>
           </div>
@@ -309,14 +469,30 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
                   {activeOrder.rejectionReason ? ` Alasan: ${activeOrder.rejectionReason}` : ''}
                 </p>
               </>
+            ) : isQrisPaid ? (
+              <>
+                <div className="w-16 h-16 rounded-full bg-emerald-500/25 text-emerald-300 flex items-center justify-center mx-auto border-2 border-emerald-400 animate-in zoom-in duration-300">
+                  <ShieldCheck className="w-9 h-9" />
+                </div>
+                <h1 className="text-xl font-black text-white">Pembayaran QRIS Berhasil!</h1>
+                <p className="text-xs text-emerald-300 max-w-xs mx-auto font-medium">
+                  Transaksi LUNAS otomatis tercatat di kasir {store.storeName}. Pesanan Anda sedang disiapkan.
+                </p>
+              </>
             ) : (
               <>
                 <div className="w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto border-2 border-emerald-500/40 animate-in zoom-in duration-300">
                   <CheckCircle2 className="w-9 h-9" />
                 </div>
-                <h1 className="text-xl font-black text-white">Pesanan Anda Terkirim!</h1>
+                <h1 className="text-xl font-black text-white">
+                  {activeOrder.paymentPreference === 'qris_online'
+                    ? 'Silakan Selesaikan Pembayaran QRIS'
+                    : 'Pesanan Anda Terkirim!'}
+                </h1>
                 <p className="text-xs text-slate-400 max-w-xs mx-auto">
-                  Pesanan telah otomatis masuk ke sistem kasir {store.storeName}.
+                  {activeOrder.paymentPreference === 'qris_online'
+                    ? 'Scan QRIS di bawah ini lalu klik tombol verifikasi agar pembayaran otomatis masuk ke kasir.'
+                    : `Pesanan telah otomatis masuk ke sistem kasir ${store.storeName}.`}
                 </p>
               </>
             )}
@@ -341,7 +517,9 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
                   <img src={orderQrDataUrl} alt="Order QR Code" className="w-36 h-36 object-contain" />
                 </div>
                 <span className="text-[11px] text-slate-500 mt-2 font-medium">
-                  Tunjukkan QR / Kode ini ke kasir saat pembayaran
+                  {isQrisPaid
+                    ? 'Tunjukkan QR / Kode pesanan ini saat mengambil pesanan'
+                    : 'Tunjukkan QR / Kode ini ke kasir jika diperlukan'}
                 </span>
               </div>
             )}
@@ -362,6 +540,176 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
               </div>
             </div>
           </div>
+
+          {/* QRIS Online Payment Card (when customer selected QRIS Digital) */}
+          {activeOrder.paymentPreference === 'qris_online' && !isCancelled && (
+            isQrisPaid ? (
+              <div className="bg-white text-slate-900 rounded-3xl p-5 shadow-2xl space-y-3.5 border-2 border-emerald-500">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                      <ShieldCheck className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-extrabold uppercase text-emerald-700 block">
+                        E-Receipt Pembayaran
+                      </span>
+                      <h3 className="font-black text-sm text-slate-900">QRIS Digital Otomatis</h3>
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-full bg-emerald-600 text-white text-[10px] font-black tracking-wider">
+                    LUNAS
+                  </span>
+                </div>
+
+                <div className="bg-emerald-50/70 rounded-2xl p-3 border border-emerald-200 space-y-1.5 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Total Dibayar</span>
+                    <span className="font-black font-mono text-emerald-800 text-sm">
+                      {formatRupiah(activeOrder.total)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Ref. Pembayaran</span>
+                    <span className="font-mono font-bold text-slate-800">
+                      {activeOrder.paymentReference || `QRIS-${activeOrder.orderCode}`}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Waktu Lunas</span>
+                    <span className="font-mono text-slate-700">
+                      {formatDateTime(activeOrder.paidAt || activeOrder.timestamp)}
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={isGeneratingPdf}
+                  onClick={() => void handleDownloadPaidReceiptPdf(activeOrder)}
+                  className="w-full py-3 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-all shadow-md"
+                >
+                  {isGeneratingPdf ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <FileDown className="w-4 h-4 text-emerald-400" />
+                  )}
+                  <span>{isGeneratingPdf ? 'Membuat Struk PDF...' : 'Unduh Bukti Bayar (PDF)'}</span>
+                </button>
+              </div>
+            ) : (
+              <div className="bg-white text-slate-900 rounded-3xl p-5 shadow-2xl text-center space-y-3 border-2 border-emerald-400">
+                <div className="bg-red-600 text-white rounded-xl py-1.5 px-3 flex items-center justify-between">
+                  <span className="font-extrabold text-xs tracking-wider">QRIS</span>
+                  <span className="text-[10px] font-semibold opacity-95">PEMBAYARAN OTOMATIS</span>
+                </div>
+
+                <div className="flex items-center justify-center gap-1.5 text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl py-1.5 px-3">
+                  <Clock className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Menunggu Pembayaran • Sisa waktu</span>
+                  <span className="font-mono font-black text-amber-900">{minsLeft}:{secsLeft}</span>
+                </div>
+
+                <div>
+                  <h3 className="font-extrabold text-sm text-slate-900">
+                    {store.qrisMerchantName || store.storeName}
+                  </h3>
+                  <p className="text-[11px] text-slate-500 font-mono">
+                    NMID: {store.qrisNmid || 'ID102003004005'}
+                  </p>
+                </div>
+
+                {(store.qrisImageUrl || dynamicQrisUrl) && (
+                  <div
+                    onClick={() =>
+                      setEnlargedQrisModal({
+                        imageUrl: store.qrisImageUrl || dynamicQrisUrl,
+                        amount: activeOrder.total,
+                        label: `Pesanan #${activeOrder.orderCode}`,
+                      })
+                    }
+                    className="p-2.5 bg-slate-50 rounded-2xl border-2 border-slate-200 inline-block cursor-pointer hover:border-emerald-500 transition-colors"
+                    title="Ketuk untuk memperbesar QRIS"
+                  >
+                    <img
+                      src={store.qrisImageUrl || dynamicQrisUrl}
+                      alt="QRIS Pembayaran"
+                      className="w-48 h-48 object-contain mx-auto rounded-lg"
+                    />
+                  </div>
+                )}
+
+                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-2.5">
+                  <span className="text-[10px] font-bold uppercase text-emerald-700 block">
+                    Total Pembayaran QRIS
+                  </span>
+                  <span className="text-xl font-black font-mono text-emerald-900">
+                    {formatRupiah(activeOrder.total)}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEnlargedQrisModal({
+                        imageUrl: store.qrisImageUrl || dynamicQrisUrl,
+                        amount: activeOrder.total,
+                        label: `Pesanan #${activeOrder.orderCode}`,
+                      })
+                    }
+                    className="py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Maximize2 className="w-3.5 h-3.5" />
+                    <span>Perbesar</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const img = store.qrisImageUrl || dynamicQrisUrl;
+                      if (img) {
+                        sounds.playItemBeep();
+                        downloadQRImage(img, `QRIS_${activeOrder.orderCode}_${store.storeName.replace(/\s+/g, '_')}`);
+                      }
+                    }}
+                    className="py-2 px-3 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Simpan QRIS</span>
+                  </button>
+                </div>
+
+                {qrisPayError && (
+                  <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold text-left">
+                    {qrisPayError}
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  disabled={isVerifyingQris}
+                  onClick={() => void handleConfirmAutomatedQrisPayment()}
+                  className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 disabled:opacity-60 text-white font-extrabold text-xs sm:text-sm shadow-lg shadow-emerald-600/25 flex items-center justify-center gap-2 transition-all active:scale-[0.98] cursor-pointer"
+                >
+                  {isVerifyingQris ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Memverifikasi Pembayaran QRIS...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>Saya Sudah Scan • Bayar & Verifikasi Otomatis</span>
+                    </>
+                  )}
+                </button>
+
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  Scan QRIS di atas via GoPay, OVO, Dana, ShopeePay, BCA, atau m-Banking lalu tekan tombol verifikasi agar transaksi langsung LUNAS di kasir.
+                </p>
+              </div>
+            )
+          )}
 
           {/* Live Order Tracker */}
           <div className="bg-slate-800/80 rounded-2xl p-4 border border-slate-700 space-y-3">
@@ -453,6 +801,73 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
             + Buat Pesanan Baru
           </button>
         </div>
+
+        {/* Enlarged QRIS Modal on Active Order Screen */}
+        {enlargedQrisModal && (
+          <div
+            onClick={() => setEnlargedQrisModal(null)}
+            className="fixed inset-0 z-60 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white text-slate-900 rounded-3xl p-5 max-w-sm w-full text-center shadow-2xl relative space-y-3"
+            >
+              <button
+                type="button"
+                onClick={() => setEnlargedQrisModal(null)}
+                className="absolute top-3.5 right-3.5 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+              <div className="bg-red-600 text-white rounded-xl py-1.5 px-3 flex items-center justify-between pr-10">
+                <span className="font-extrabold text-xs tracking-wider">QRIS</span>
+                <span className="text-[10px] font-semibold">PEMBAYARAN NASIONAL</span>
+              </div>
+              <div>
+                <h3 className="font-extrabold text-sm text-slate-900">{store.qrisMerchantName || store.storeName}</h3>
+                <p className="text-[11px] text-slate-500 font-mono">NMID: {store.qrisNmid || 'ID102003004005'}</p>
+              </div>
+              <div className="p-2 bg-white rounded-2xl border-2 border-slate-200 flex items-center justify-center">
+                <img src={enlargedQrisModal.imageUrl} alt="QRIS Pembayaran" className="w-full max-h-[300px] object-contain rounded-lg" />
+              </div>
+              <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-2.5">
+                <span className="text-[11px] text-slate-600 block">Nominal Pembayaran {enlargedQrisModal.label ? `(${enlargedQrisModal.label})` : ''}:</span>
+                <span className="text-xl font-black font-mono text-emerald-800">{formatRupiah(enlargedQrisModal.amount)}</span>
+              </div>
+              {!isQrisPaid && !isCancelled && activeOrder.paymentPreference === 'qris_online' && (
+                <button
+                  type="button"
+                  disabled={isVerifyingQris}
+                  onClick={() => void handleConfirmAutomatedQrisPayment()}
+                  className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 disabled:opacity-60 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
+                >
+                  {isVerifyingQris ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Memverifikasi Pembayaran...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>Saya Sudah Scan • Bayar Otomatis</span>
+                    </>
+                  )}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  sounds.playItemBeep();
+                  downloadQRImage(enlargedQrisModal.imageUrl, `QRIS_${store.storeName.replace(/\s+/g, '_')}`);
+                }}
+                className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                <span>Simpan Gambar QRIS</span>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -749,9 +1164,35 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
             <div className="p-4 space-y-4 overflow-y-auto flex-1">
               {/* Customer Info Form */}
               <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-3">
-                <span className="text-xs font-bold text-slate-700 block">Identitas Pemesan</span>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-slate-700">Identitas Pemesan</span>
+                  <div className="flex items-center bg-white rounded-lg p-0.5 border border-slate-200 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setOrderType('dine_in')}
+                      className={`px-2.5 py-1 rounded-md font-bold transition-colors cursor-pointer ${
+                        orderType === 'dine_in'
+                          ? 'bg-emerald-600 text-white'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Meja
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setOrderType('takeaway')}
+                      className={`px-2.5 py-1 rounded-md font-bold transition-colors cursor-pointer ${
+                        orderType === 'takeaway'
+                          ? 'bg-emerald-600 text-white'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Bawa Pulang
+                    </button>
+                  </div>
+                </div>
 
-                <div className="grid grid-cols-2 gap-2.5">
+                <div className={`grid gap-2.5 ${orderType === 'dine_in' ? 'grid-cols-2' : 'grid-cols-1'}`}>
                   <div>
                     <label className="text-[11px] font-semibold text-slate-600 block mb-1">
                       Nama Anda <span className="text-rose-500">*</span>
@@ -765,18 +1206,20 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
                     />
                   </div>
 
-                  <div>
-                    <label className="text-[11px] font-semibold text-slate-600 block mb-1">
-                      Nomor Meja <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={tableNumber}
-                      onChange={(e) => setTableNumber(e.target.value)}
-                      placeholder="Contoh: 05"
-                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    />
-                  </div>
+                  {orderType === 'dine_in' && (
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-600 block mb-1">
+                        Nomor Meja <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={tableNumber}
+                        onChange={(e) => setTableNumber(e.target.value)}
+                        placeholder="Contoh: 05"
+                        className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -834,12 +1277,15 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
               </div>
 
               {/* Payment Preference */}
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <span className="text-xs font-bold text-slate-700 block">Preferensi Pembayaran</span>
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   <button
                     type="button"
-                    onClick={() => setPaymentPreference('pay_at_cashier')}
+                    onClick={() => {
+                      sounds.playItemBeep();
+                      setPaymentPreference('pay_at_cashier');
+                    }}
                     className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
                       paymentPreference === 'pay_at_cashier'
                         ? 'border-emerald-600 bg-emerald-50 text-emerald-800 font-bold ring-2 ring-emerald-500/20'
@@ -850,16 +1296,101 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setPaymentPreference('qris_online')}
-                    className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                    onClick={() => {
+                      sounds.playItemBeep();
+                      setPaymentPreference('qris_online');
+                    }}
+                    className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                       paymentPreference === 'qris_online'
                         ? 'border-emerald-600 bg-emerald-50 text-emerald-800 font-bold ring-2 ring-emerald-500/20'
                         : 'border-slate-200 text-slate-600 hover:bg-slate-50'
                     }`}
                   >
-                    QRIS Digital
+                    <QrCode className="w-3.5 h-3.5" />
+                    <span>QRIS Digital</span>
                   </button>
                 </div>
+
+                {/* Live QRIS Payment Preview inside Checkout Drawer */}
+                {paymentPreference === 'qris_online' && (
+                  <div className="bg-white rounded-2xl p-3.5 border-2 border-emerald-300 shadow-xs text-center space-y-2.5 animate-in fade-in duration-200">
+                    <div className="bg-red-600 text-white rounded-lg py-1 px-2.5 flex items-center justify-between">
+                      <span className="font-extrabold text-[11px] tracking-wider">QRIS</span>
+                      <span className="text-[9px] font-semibold opacity-95">PEMBAYARAN NASIONAL</span>
+                    </div>
+
+                    <div>
+                      <p className="font-extrabold text-xs text-slate-900">
+                        {store.qrisMerchantName || store.storeName}
+                      </p>
+                      <p className="text-[10px] text-slate-500 font-mono">
+                        NMID: {store.qrisNmid || 'ID102003004005'}
+                      </p>
+                    </div>
+
+                    {(store.qrisImageUrl || dynamicQrisUrl) && (
+                      <div
+                        onClick={() =>
+                          setEnlargedQrisModal({
+                            imageUrl: store.qrisImageUrl || dynamicQrisUrl,
+                            amount: grandTotal,
+                          })
+                        }
+                        className="p-2 bg-slate-50 rounded-xl border border-slate-200 inline-block cursor-pointer hover:border-emerald-500 transition-colors"
+                        title="Ketuk untuk memperbesar QRIS"
+                      >
+                        <img
+                          src={store.qrisImageUrl || dynamicQrisUrl}
+                          alt="QRIS Toko"
+                          className="w-40 h-40 object-contain mx-auto rounded-lg"
+                        />
+                      </div>
+                    )}
+
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-2">
+                      <span className="text-[10px] text-emerald-700 font-bold uppercase block">
+                        Total Bayar QRIS
+                      </span>
+                      <span className="text-base font-black font-mono text-emerald-900">
+                        {formatRupiah(grandTotal)}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEnlargedQrisModal({
+                            imageUrl: store.qrisImageUrl || dynamicQrisUrl,
+                            amount: grandTotal,
+                          })
+                        }
+                        className="py-1.5 px-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                      >
+                        <Maximize2 className="w-3 h-3" />
+                        <span>Perbesar QRIS</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const img = store.qrisImageUrl || dynamicQrisUrl;
+                          if (img) {
+                            sounds.playItemBeep();
+                            downloadQRImage(img, `QRIS_${store.storeName.replace(/\s+/g, '_')}`);
+                          }
+                        }}
+                        className="py-1.5 px-2.5 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                      >
+                        <Download className="w-3 h-3" />
+                        <span>Simpan QRIS</span>
+                      </button>
+                    </div>
+
+                    <p className="text-[10px] text-slate-500 leading-relaxed">
+                      Klik tombol di bawah untuk membuat pesanan dan langsung menyelesaikan pembayaran QRIS otomatis di layar berikutnya.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Price Breakdown */}
@@ -897,11 +1428,22 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
               )}
               <button
                 type="button"
-                onClick={handleSubmitOrder}
-                className="w-full py-3.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-extrabold text-sm shadow-xl shadow-emerald-600/25 flex items-center justify-center gap-2 transition-all active:scale-[0.98] cursor-pointer"
+                onClick={() => void handleSubmitOrder()}
+                disabled={isSubmitting}
+                className="w-full py-3.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 disabled:opacity-60 text-white font-extrabold text-sm shadow-xl shadow-emerald-600/25 flex items-center justify-center gap-2 transition-all active:scale-[0.98] cursor-pointer"
               >
-                <Send className="w-4 h-4" />
-                <span>Kirim Pesanan ke Kasir Sekarang</span>
+                {paymentPreference === 'qris_online' ? (
+                  <QrCode className="w-4 h-4" />
+                ) : (
+                  <Send className="w-4 h-4" />
+                )}
+                <span>
+                  {isSubmitting
+                    ? 'Mengirim Pesanan ke Kasir...'
+                    : paymentPreference === 'qris_online'
+                    ? 'Buat Pesanan & Bayar QRIS'
+                    : 'Kirim Pesanan ke Kasir Sekarang'}
+                </span>
               </button>
             </div>
           </div>
@@ -1002,6 +1544,52 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
               </button>
             </div>
           </form>
+        </div>
+      )}
+      {/* Enlarged QRIS Modal in Catalog/Checkout View */}
+      {enlargedQrisModal && (
+        <div
+          onClick={() => setEnlargedQrisModal(null)}
+          className="fixed inset-0 z-60 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white text-slate-900 rounded-3xl p-5 max-w-sm w-full text-center shadow-2xl relative space-y-3"
+          >
+            <button
+              type="button"
+              onClick={() => setEnlargedQrisModal(null)}
+              className="absolute top-3.5 right-3.5 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <div className="bg-red-600 text-white rounded-xl py-1.5 px-3 flex items-center justify-between pr-10">
+              <span className="font-extrabold text-xs tracking-wider">QRIS</span>
+              <span className="text-[10px] font-semibold">PEMBAYARAN NASIONAL</span>
+            </div>
+            <div>
+              <h3 className="font-extrabold text-sm text-slate-900">{store.qrisMerchantName || store.storeName}</h3>
+              <p className="text-[11px] text-slate-500 font-mono">NMID: {store.qrisNmid || 'ID102003004005'}</p>
+            </div>
+            <div className="p-2 bg-white rounded-2xl border-2 border-slate-200 flex items-center justify-center">
+              <img src={enlargedQrisModal.imageUrl} alt="QRIS Pembayaran" className="w-full max-h-[300px] object-contain rounded-lg" />
+            </div>
+            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-2.5">
+              <span className="text-[11px] text-slate-600 block">Nominal Pembayaran:</span>
+              <span className="text-xl font-black font-mono text-emerald-800">{formatRupiah(enlargedQrisModal.amount)}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                sounds.playItemBeep();
+                downloadQRImage(enlargedQrisModal.imageUrl, `QRIS_${store.storeName.replace(/\s+/g, '_')}`);
+              }}
+              className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <Download className="w-4 h-4" />
+              <span>Simpan Gambar QRIS</span>
+            </button>
+          </div>
         </div>
       )}
     </div>

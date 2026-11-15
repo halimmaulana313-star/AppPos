@@ -55,6 +55,61 @@ export function buildCustomerOrderUrl(tableNumber?: string): string {
 }
 
 /**
+ * Compute CRC16-CCITT (0xFFFF) checksum for EMVCo QRIS payloads
+ */
+function crc16Ccitt(str: string): string {
+  let crc = 0xffff;
+  for (let i = 0; i < str.length; i++) {
+    crc ^= str.charCodeAt(i) << 8;
+    for (let j = 0; j < 8; j++) {
+      if ((crc & 0x8000) !== 0) {
+        crc = ((crc << 1) ^ 0x1021) & 0xffff;
+      } else {
+        crc = (crc << 1) & 0xffff;
+      }
+    }
+  }
+  return crc.toString(16).toUpperCase().padStart(4, '0');
+}
+
+function tlv(tag: string, value: string): string {
+  const len = String(value.length).padStart(2, '0');
+  return `${tag}${len}${value}`;
+}
+
+/**
+ * Build an EMVCo QRIS payload with merchant info and nominal amount
+ */
+export function buildQrisPayload(params: {
+  merchantName: string;
+  nmid?: string;
+  amount: number;
+  orderCode?: string;
+}): string {
+  const cleanName = (params.merchantName || 'TOKO KASIRKU').slice(0, 25).toUpperCase();
+  const cleanNmid = (params.nmid || 'ID102003004005').replace(/\s+/g, '').slice(0, 20);
+  const amountStr = Math.max(0, Math.round(params.amount)).toString();
+
+  const mai = tlv('00', 'ID.CO.QRIS.WWW') + tlv('01', cleanNmid) + tlv('03', 'UMI');
+  const additionalData = params.orderCode ? tlv('62', tlv('01', params.orderCode.slice(0, 20))) : '';
+
+  const body =
+    tlv('00', '01') +
+    tlv('01', '12') +
+    tlv('26', mai) +
+    tlv('52', '5812') +
+    tlv('53', '360') +
+    (amountStr !== '0' ? tlv('54', amountStr) : '') +
+    tlv('58', 'ID') +
+    tlv('59', cleanName) +
+    tlv('60', 'INDONESIA') +
+    additionalData +
+    '6304';
+
+  return body + crc16Ccitt(body);
+}
+
+/**
  * Download QR Code as PNG file
  */
 export function downloadQRImage(dataUrl: string, fileName: string): void {

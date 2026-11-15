@@ -151,6 +151,10 @@ export interface OnlineOrder {
   notes?: string;
   rejectionReason?: string;
   paymentPreference?: 'pay_at_cashier' | 'qris_online';
+  paymentStatus?: 'unpaid' | 'waiting_payment' | 'paid';
+  paidAt?: string;
+  paymentReference?: string;
+  posOrderId?: string;
   acceptedAt?: string;
   completedAt?: string;
 }

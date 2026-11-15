@@ -16,6 +16,7 @@ import {
   Plus,
   Printer,
   QrCode,
+  RefreshCw,
   RotateCcw,
   Search,
   ShoppingBag,
@@ -56,6 +57,7 @@ export const OnlineOrdersView: React.FC<OnlineOrdersViewProps> = ({
   const [orderToReject, setOrderToReject] = useState<OnlineOrder | null>(null);
   const [rejectReason, setRejectReason] = useState<string>('Bahan menu habis');
   const [orderIdToDelete, setOrderIdToDelete] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [toastNotification, setToastNotification] = useState<{ type: 'info' | 'error' | 'success'; message: string } | null>(null);
 
   const pendingCount = onlineOrders.filter((o) => o.status === 'pending').length;
@@ -96,6 +98,23 @@ export const OnlineOrdersView: React.FC<OnlineOrdersViewProps> = ({
     onlineOrdersManager.updateOrderStatus(order.id, 'completed');
   };
 
+  const handleVerifyQrisPaid = async (order: OnlineOrder) => {
+    const res = await onlineOrdersManager.payOrderWithQris(order.id);
+    if (res.ok) {
+      sounds.playCashRegister();
+      setToastNotification({
+        type: 'success',
+        message: `Pembayaran QRIS #${order.orderCode} berhasil diverifikasi LUNAS dan masuk ke laporan POS!`,
+      });
+    } else {
+      sounds.playError();
+      setToastNotification({
+        type: 'error',
+        message: res.error || 'Gagal memverifikasi pembayaran QRIS.',
+      });
+    }
+  };
+
   const handleRejectOrder = (order: OnlineOrder) => {
     sounds.playError();
     setRejectReason('Bahan menu habis');
@@ -129,12 +148,31 @@ export const OnlineOrdersView: React.FC<OnlineOrdersViewProps> = ({
   };
 
   // Demo order generator for quick testing
-  const handleCreateDemoOrder = () => {
-    sounds.playOrderNotification();
+  const handleCreateDemoOrder = async () => {
     const tables = ['02', '03', '05', '07', '10'];
     const randomTable = tables[Math.floor(Math.random() * tables.length)];
     const demo = onlineOrdersManager.createDemoOrder(products, store, randomTable);
-    onlineOrdersManager.addOrder(demo);
+    const result = await onlineOrdersManager.addOrder(demo);
+    if (result.ok) {
+      sounds.playOrderNotification();
+      setToastNotification({
+        type: 'success',
+        message: `Pesanan simulasi #${demo.orderCode} (Meja ${randomTable}) berhasil masuk ke sistem!`,
+      });
+    } else {
+      sounds.playError();
+      setToastNotification({
+        type: 'error',
+        message: result.error || 'Gagal membuat pesanan simulasi.',
+      });
+    }
+  };
+
+  const handleRefreshOrders = async () => {
+    setIsRefreshing(true);
+    await onlineOrdersManager.refreshFromServer(false);
+    sounds.playItemBeep();
+    setTimeout(() => setIsRefreshing(false), 400);
   };
 
   // Print kitchen order ticket via Bluetooth
@@ -231,7 +269,17 @@ export const OnlineOrdersView: React.FC<OnlineOrdersViewProps> = ({
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={handleCreateDemoOrder}
+            onClick={() => void handleRefreshOrders()}
+            className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer"
+            title="Sinkronkan daftar pesanan online terbaru dari server"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 ${isRefreshing ? 'animate-spin' : ''}`} />
+            <span>Sinkronkan</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void handleCreateDemoOrder()}
             className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer"
             title="Simulasikan ada pelanggan yang memesan dari Meja 03"
           >
@@ -400,11 +448,31 @@ export const OnlineOrdersView: React.FC<OnlineOrdersViewProps> = ({
                     </span>
                   </div>
 
-                  {/* Customer Info & Time */}
-                  <div className="flex items-center justify-between text-xs text-slate-500 pt-2 pb-1">
+                  {/* Customer Info, Payment Preference & Time */}
+                  <div className="flex items-center justify-between gap-2 text-xs text-slate-500 pt-2 pb-1">
                     <span className="font-bold text-slate-800 truncate">{order.customerName}</span>
-                    <span className="text-[11px] font-mono">{formatTimeOnly(order.timestamp)}</span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {order.paymentStatus === 'paid' ? (
+                        <span className="text-[10px] font-black px-2 py-0.5 rounded-full border bg-emerald-100 text-emerald-800 border-emerald-300">
+                          LUNAS • QRIS
+                        </span>
+                      ) : order.paymentPreference === 'qris_online' ? (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-200">
+                          Menunggu QRIS
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-slate-100 text-slate-600 border-slate-200">
+                          Bayar di Kasir
+                        </span>
+                      )}
+                      <span className="text-[11px] font-mono">{formatTimeOnly(order.timestamp)}</span>
+                    </div>
                   </div>
+                  {order.paymentStatus === 'paid' && order.paymentReference && (
+                    <div className="text-[10px] font-mono text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-200 inline-block mb-1">
+                      Ref: {order.paymentReference}
+                    </div>
+                  )}
 
                   {/* Items List */}
                   <div className="space-y-1.5 py-2 max-h-36 overflow-y-auto">
@@ -477,19 +545,48 @@ export const OnlineOrdersView: React.FC<OnlineOrdersViewProps> = ({
                       </>
                     )}
 
-                    {/* Load to Cashier POS for Payment (hidden for already cancelled orders) */}
-                    {!isCancelled && (
-                      <button
-                        type="button"
-                        onClick={() => onLoadOrderToPOS(order)}
-                        className={`py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-600/20 active:scale-95 cursor-pointer flex items-center justify-center gap-1 ${
-                          isPending ? 'col-span-2' : ''
-                        }`}
-                        title="Muat pesanan ini ke keranjang kasir untuk langsung dibayar"
-                      >
-                        <CreditCard className="w-3.5 h-3.5" />
-                        <span>Muat ke Kasir & Bayar</span>
-                      </button>
+                    {/* For already QRIS-paid orders: prevent double charging, offer Mark Served instead */}
+                    {!isCancelled && order.paymentStatus === 'paid' ? (
+                      !isCompleted && (
+                        <button
+                          type="button"
+                          onClick={() => handleCompleteOrder(order)}
+                          className={`py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-600/20 active:scale-95 cursor-pointer flex items-center justify-center gap-1 ${
+                            isPending ? 'col-span-2' : ''
+                          }`}
+                          title="Pesanan sudah lunas QRIS — tandai selesai disajikan"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Selesai Disajikan</span>
+                        </button>
+                      )
+                    ) : (
+                      !isCancelled && (
+                        <>
+                          {order.paymentPreference === 'qris_online' && (
+                            <button
+                              type="button"
+                              onClick={() => void handleVerifyQrisPaid(order)}
+                              className="col-span-2 py-2 px-3 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1"
+                              title="Konfirmasi pembayaran QRIS sudah masuk"
+                            >
+                              <QrCode className="w-3.5 h-3.5" />
+                              <span>Verifikasi Lunas QRIS</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => onLoadOrderToPOS(order)}
+                            className={`py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-600/20 active:scale-95 cursor-pointer flex items-center justify-center gap-1 ${
+                              isPending || order.paymentPreference === 'qris_online' ? 'col-span-2' : ''
+                            }`}
+                            title="Muat pesanan ini ke keranjang kasir untuk langsung dibayar"
+                          >
+                            <CreditCard className="w-3.5 h-3.5" />
+                            <span>Muat ke Kasir & Bayar</span>
+                          </button>
+                        </>
+                      )
                     )}
 
                     {/* Print ticket */}

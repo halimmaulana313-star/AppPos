@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
-import { LogOut, Menu, ShoppingBag } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { CheckCircle2, LogOut, Menu, QrCode, ShoppingBag } from 'lucide-react';
 import { CashierPOSView } from './components/CashierPOSView';
 import { CustomerOrderPortal } from './components/CustomerOrderPortal';
 import { DailyReportsView } from './components/DailyReportsView';
@@ -38,7 +38,7 @@ import {
   bluetoothPrinter,
   BluetoothPrinterState,
 } from './utils/bluetoothThermalPrinter';
-import { onlineOrdersManager } from './utils/onlineOrdersManager';
+import { onlineOrdersManager, PaidPosEvent } from './utils/onlineOrdersManager';
 import {
   DEFAULT_PRINTER_CONFIG,
   DEFAULT_STORE_PROFILE,
@@ -46,7 +46,7 @@ import {
   INITIAL_PRODUCTS,
   getInitialOrders,
 } from './utils/initialData';
-import { getLocalDateString } from './utils/formatters';
+import { formatRupiah, getLocalDateString } from './utils/formatters';
 import { sounds } from './utils/soundEffects';
 
 const STORAGE_KEY_STORE = 'kasirku_store_v1';
@@ -228,16 +228,80 @@ export default function App() {
     return '';
   });
 
-  // Online Orders State with BroadcastChannel Sync
+  // Online Orders State with Server SSE/REST + BroadcastChannel Sync
   const [onlineOrders, setOnlineOrders] = useState<OnlineOrder[]>(() => onlineOrdersManager.getOrders());
   const [newOrderToast, setNewOrderToast] = useState<OnlineOrder | null>(null);
+  const [qrisPaidToast, setQrisPaidToast] = useState<PaidPosEvent | null>(null);
   const [activeOnlineOrderId, setActiveOnlineOrderId] = useState<string | null>(null);
+  const [activeOnlinePaymentPref, setActiveOnlinePaymentPref] = useState<'pay_at_cashier' | 'qris_online' | null>(null);
+  const [remoteCatalog, setRemoteCatalog] = useState<{ store: StoreProfile | null; products: Product[] | null } | null>(null);
+  const processedPosOrderIdsRef = useRef<Set<string>>(new Set());
+
+  // Keep processed POS order IDs synced with persisted orders so stock is never deducted twice
+  useEffect(() => {
+    for (const o of orders) {
+      processedPosOrderIdsRef.current.add(o.id);
+    }
+  }, [orders]);
+
+  const reconcilePaidPosOrders = useCallback(
+    (posOrders: Order[], latestPaid?: PaidPosEvent) => {
+      if (!Array.isArray(posOrders) || posOrders.length === 0) return;
+
+      const unseen = posOrders.filter((po) => !processedPosOrderIdsRef.current.has(po.id));
+      if (unseen.length === 0) return;
+
+      // Mark synchronously before state updates to guarantee idempotency
+      for (const po of unseen) {
+        processedPosOrderIdsRef.current.add(po.id);
+      }
+
+      // Compute total quantity sold per product ID across unseen QRIS transactions
+      const qtyByProductId = new Map<string, number>();
+      for (const po of unseen) {
+        for (const item of po.items) {
+          qtyByProductId.set(
+            item.product.id,
+            (qtyByProductId.get(item.product.id) || 0) + item.quantity
+          );
+        }
+      }
+
+      setProducts((prev) =>
+        prev.map((p) => {
+          const soldQty = qtyByProductId.get(p.id);
+          if (!soldQty) return p;
+          return { ...p, stock: Math.max(0, p.stock - soldQty) };
+        })
+      );
+
+      setOrders((prev) => {
+        const existingIds = new Set(prev.map((o) => o.id));
+        const trulyNew = unseen.filter((po) => !existingIds.has(po.id));
+        if (trulyNew.length === 0) return prev;
+        return [...trulyNew, ...prev];
+      });
+
+      sounds.playCashRegister();
+
+      if (latestPaid) {
+        setQrisPaidToast(latestPaid);
+        setTimeout(() => {
+          setQrisPaidToast((curr) =>
+            curr?.posOrder.id === latestPaid.posOrder.id ? null : curr
+          );
+        }, 8000);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
-    if (cart.length === 0 && activeOnlineOrderId) {
+    if (cart.length === 0 && (activeOnlineOrderId || activeOnlinePaymentPref)) {
       setActiveOnlineOrderId(null);
+      setActiveOnlinePaymentPref(null);
     }
-  }, [cart.length, activeOnlineOrderId]);
+  }, [cart.length, activeOnlineOrderId, activeOnlinePaymentPref]);
 
   useEffect(() => {
     const unsubscribe = onlineOrdersManager.subscribe((orders, newOrder) => {
@@ -251,6 +315,48 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // Reconcile QRIS Portal settled transactions automatically into cashier POS
+  useEffect(() => {
+    if (isCustomerPortalActive) return;
+
+    const unsubscribePaid = onlineOrdersManager.subscribePaidPosOrders((posOrders, latestPaid) => {
+      reconcilePaidPosOrders(posOrders, latestPaid);
+    });
+
+    void onlineOrdersManager.fetchPaidPosOrders().then((posOrders) => {
+      reconcilePaidPosOrders(posOrders);
+    });
+
+    return () => unsubscribePaid();
+  }, [isCustomerPortalActive, reconcilePaidPosOrders]);
+
+  // Push store & menu catalog from authenticated POS to server so QR customers on other devices see live data
+  useEffect(() => {
+    if (currentUser && !isCustomerPortalActive) {
+      void onlineOrdersManager.syncCatalogToServer(store, products);
+    }
+  }, [currentUser, isCustomerPortalActive, store, products]);
+
+  // Fetch & subscribe to live catalog when Customer Portal is active
+  useEffect(() => {
+    if (!isCustomerPortalActive) return;
+    let active = true;
+    void onlineOrdersManager.fetchCatalogFromServer().then((snap) => {
+      if (active && snap && (snap.store || snap.products)) {
+        setRemoteCatalog({ store: snap.store, products: snap.products });
+      }
+    });
+    const unsubscribe = onlineOrdersManager.subscribeCatalog((snap) => {
+      if (active && (snap.store || snap.products)) {
+        setRemoteCatalog({ store: snap.store, products: snap.products });
+      }
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [isCustomerPortalActive]);
+
   const pendingOnlineOrdersCount = useMemo(() => {
     return onlineOrders.filter((o) => o.status === 'pending').length;
   }, [onlineOrders]);
@@ -263,9 +369,10 @@ export default function App() {
     setOrderType(onlineOrder.orderType);
     setGlobalDiscountPercent(0);
     setActiveOnlineOrderId(onlineOrder.id);
+    setActiveOnlinePaymentPref(onlineOrder.paymentPreference || null);
     setActiveTab('pos');
     if (onlineOrder.status === 'pending') {
-      onlineOrdersManager.updateOrderStatus(onlineOrder.id, 'accepted');
+      void onlineOrdersManager.updateOrderStatus(onlineOrder.id, 'accepted');
     }
   };
 
@@ -353,7 +460,7 @@ export default function App() {
 
     // Mark linked online order as completed if applicable
     if (activeOnlineOrderId) {
-      onlineOrdersManager.updateOrderStatus(activeOnlineOrderId, 'completed');
+      void onlineOrdersManager.updateOrderStatus(activeOnlineOrderId, 'completed');
       setActiveOnlineOrderId(null);
     }
 
@@ -439,16 +546,24 @@ export default function App() {
 
   // If Customer Order Portal is active (e.g. Scanned QR Code Meja / Online link)
   if (isCustomerPortalActive) {
+    const portalStore = remoteCatalog?.store || store;
+    const portalProducts =
+      remoteCatalog?.products && remoteCatalog.products.length > 0
+        ? remoteCatalog.products
+        : products;
+
     return (
       <CustomerOrderPortal
-        products={products}
-        store={store}
+        products={portalProducts}
+        store={portalStore}
+        printerConfig={printerConfig}
         initialTable={customerPortalTable}
         onExitPortal={() => {
           setIsCustomerPortalActive(false);
           if (typeof window !== 'undefined' && window.history) {
             window.history.replaceState({}, '', window.location.pathname);
           }
+          void onlineOrdersManager.refreshFromServer(false);
         }}
       />
     );
@@ -665,6 +780,7 @@ export default function App() {
         store={store}
         printerConfig={printerConfig}
         isMaster={isMaster}
+        defaultPaymentMethod={activeOnlinePaymentPref === 'qris_online' ? 'qris' : 'cash'}
         onUpdateStore={setStore}
         onCompleteOrder={handleCompleteOrder}
       />
@@ -801,6 +917,44 @@ export default function App() {
             className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shrink-0 cursor-pointer shadow-xs"
           >
             Buka
+          </button>
+        </div>
+      )}
+
+      {/* Floating Toast Notification for Automated QRIS Payment Settlement */}
+      {qrisPaidToast && (
+        <div
+          className={`fixed right-5 z-50 bg-emerald-950 text-white p-4 rounded-2xl shadow-2xl border-2 border-teal-400 animate-in slide-in-from-top-4 flex items-center gap-3.5 max-w-sm ${
+            newOrderToast ? 'top-44' : 'top-20'
+          }`}
+        >
+          <div className="w-10 h-10 rounded-xl bg-teal-400 text-emerald-950 flex items-center justify-center font-bold text-sm shrink-0">
+            <QrCode className="w-5 h-5" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5">
+              <CheckCircle2 className="w-3.5 h-3.5 text-teal-300 shrink-0" />
+              <span className="text-xs font-black text-teal-300">Pembayaran QRIS Lunas!</span>
+              <span className="text-[10px] bg-emerald-900 text-emerald-100 font-mono px-1 rounded">
+                #{qrisPaidToast.order.orderCode}
+              </span>
+            </div>
+            <p className="text-xs font-bold text-white truncate">
+              {qrisPaidToast.order.customerName} • {formatRupiah(qrisPaidToast.order.total)}
+            </p>
+            <span className="text-[11px] text-emerald-300 font-mono font-semibold block truncate">
+              Otomatis tercatat di Riwayat & Laporan
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('online_orders');
+              setQrisPaidToast(null);
+            }}
+            className="px-3 py-1.5 bg-teal-500 hover:bg-teal-400 text-slate-950 rounded-xl text-xs font-bold shrink-0 cursor-pointer shadow-xs"
+          >
+            Lihat
           </button>
         </div>
       )}

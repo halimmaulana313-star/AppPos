@@ -45,6 +45,7 @@ interface PaymentModalProps {
   store: StoreProfile;
   printerConfig: PrinterConfig;
   isMaster?: boolean;
+  defaultPaymentMethod?: PaymentMethod;
   onUpdateStore?: React.Dispatch<React.SetStateAction<StoreProfile>>;
   onCompleteOrder: (paymentDetails: {
     paymentMethod: PaymentMethod;
@@ -73,10 +74,11 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   store,
   printerConfig,
   isMaster = true,
+  defaultPaymentMethod = 'cash',
   onUpdateStore,
   onCompleteOrder,
 }) => {
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(defaultPaymentMethod);
   const [cashGiven, setCashGiven] = useState<number>(total);
   const [cashInputString, setCashInputString] = useState<string>(String(total));
   const [shouldAutoPrint, setShouldAutoPrint] = useState<boolean>(printerConfig.autoPrintOnPayment);
@@ -87,14 +89,14 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      setPaymentMethod('cash');
+      setPaymentMethod(defaultPaymentMethod);
       setCashGiven(total);
       setCashInputString(String(total));
       setShouldAutoPrint(printerConfig.autoPrintOnPayment);
       setIsQrisEnlarged(false);
       setConfirmRemoveQris(false);
     }
-  }, [isOpen, total, printerConfig.autoPrintOnPayment]);
+  }, [isOpen, total, printerConfig.autoPrintOnPayment, defaultPaymentMethod]);
 
   if (!isOpen) return null;
 

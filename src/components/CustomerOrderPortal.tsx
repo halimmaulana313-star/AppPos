@@ -292,16 +292,6 @@ export const CustomerOrderPortal: React.FC<CustomerOrderPortalProps> = ({
               </p>
             </div>
           </div>
-
-          {onExitPortal && (
-            <button
-              type="button"
-              onClick={onExitPortal}
-              className="text-xs bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-1.5 rounded-lg font-medium transition-colors"
-            >
-              Mode Kasir
-            </button>
-          )}
         </div>
 
         {/* Content Body */}

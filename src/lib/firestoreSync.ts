@@ -33,8 +33,7 @@ import { OperationType, auth, db, handleFirestoreError } from './firebase';
 
 export const BOOTSTRAP_ADMIN_EMAILS = [
   'halimmaulana133@gmail.com',
-  'kopiliterasi12@gmail.com',
-  'kopilietras12@gmail.com',
+  'haimmaulana313@gmail.com',
 ] as const;
 export const BOOTSTRAP_ADMIN_EMAIL = 'halimmaulana133@gmail.com';
 export const DEFAULT_STORE_DOC_ID = 'default';

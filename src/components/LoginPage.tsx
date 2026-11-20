@@ -420,7 +420,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             maxLength={200}
             autoComplete="email"
             onChange={(e) => setEmail(e.target.value)}
-            placeholder={isMasterTab ? 'kopilietras12@gmail.com' : 'nama@email.com'}
+            placeholder={isMasterTab ? 'haimmaulana313@gmail.com' : 'nama@email.com'}
             required
             className={`w-full pl-10 pr-3.5 py-2.5 bg-slate-900/70 border border-slate-700 rounded-xl text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 ${
               isMasterTab ? 'focus:ring-amber-500' : 'focus:ring-emerald-500'

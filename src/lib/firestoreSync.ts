@@ -33,6 +33,7 @@ import { OperationType, auth, db, handleFirestoreError } from './firebase';
 
 export const BOOTSTRAP_ADMIN_EMAILS = [
   'halimmaulana133@gmail.com',
+  'halimmaulana313@gmail.com',
   'haimmaulana313@gmail.com',
 ] as const;
 export const BOOTSTRAP_ADMIN_EMAIL = 'halimmaulana133@gmail.com';
@@ -598,8 +599,17 @@ export async function updatePosOrderStatusInFirestore(
 export async function deletePosOrderFromFirestore(orderId: string): Promise<void> {
   const safeId = sanitizeFirestoreId(orderId, 'ORD');
   const path = `posOrders/${safeId}`;
+  const currentUser = auth.currentUser;
+  const isBootstrap = isBootstrapAdminUser(currentUser);
   try {
-    const itemsSnap = await getDocs(collection(db, 'posOrders', safeId, 'items'));
+    const itemsQuery =
+      isBootstrap || !currentUser
+        ? collection(db, 'posOrders', safeId, 'items')
+        : query(
+            collection(db, 'posOrders', safeId, 'items'),
+            where('staffUids', 'array-contains', currentUser.uid)
+          );
+    const itemsSnap = await getDocs(itemsQuery);
     const batch = writeBatch(db);
     itemsSnap.docs.forEach((d) => batch.delete(d.ref));
     batch.delete(doc(db, 'posOrders', safeId));
@@ -723,7 +733,7 @@ export function subscribePosOrders(
   uid: string,
   isBootstrap: boolean,
   isMaster: boolean,
-  onOrdersData: (orders: Order[]) => void
+  onOrdersData: (orders: Order[], removedOrderIds: string[]) => void
 ): () => void {
   const q = isBootstrap
     ? collection(db, 'posOrders')
@@ -734,13 +744,30 @@ export function subscribePosOrders(
   return onSnapshot(
     q,
     async (snapshot) => {
-      if (snapshot.empty) return;
+      const removedIds = snapshot
+        .docChanges()
+        .filter((change) => change.type === 'removed')
+        .map((change) => change.doc.id);
+
+      if (snapshot.empty && removedIds.length === 0) return;
+
       const hydrated: Order[] = await Promise.all(
         snapshot.docs.map(async (orderDoc) => {
           const d = orderDoc.data();
           let items: CartItem[] = [];
           try {
-            const itemsSnap = await getDocs(collection(db, 'posOrders', orderDoc.id, 'items'));
+            const itemsQuery = isBootstrap
+              ? collection(db, 'posOrders', orderDoc.id, 'items')
+              : isMaster
+                ? query(
+                    collection(db, 'posOrders', orderDoc.id, 'items'),
+                    where('staffUids', 'array-contains', uid)
+                  )
+                : query(
+                    collection(db, 'posOrders', orderDoc.id, 'items'),
+                    where('cashierUid', '==', uid)
+                  );
+            const itemsSnap = await getDocs(itemsQuery);
             items = itemsSnap.docs.map((itemDoc) => {
               const idata = itemDoc.data();
               return {
@@ -795,7 +822,7 @@ export function subscribePosOrders(
       hydrated.sort(
         (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
       );
-      onOrdersData(hydrated);
+      onOrdersData(hydrated, removedIds);
     },
     (error) => {
       handleFirestoreError(error, OperationType.LIST, 'posOrders');

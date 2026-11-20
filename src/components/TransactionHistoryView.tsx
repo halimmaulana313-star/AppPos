@@ -22,6 +22,7 @@ import { sounds } from '../utils/soundEffects';
 interface TransactionHistoryViewProps {
   orders: Order[];
   onCancelOrder: (orderId: string) => Promise<void>;
+  onDeleteOrder?: (orderId: string) => Promise<void>;
   onSelectOrderReceipt: (order: Order) => void;
   isMaster?: boolean;
   store?: StoreProfile;
@@ -30,6 +31,7 @@ interface TransactionHistoryViewProps {
 export const TransactionHistoryView: React.FC<TransactionHistoryViewProps> = ({
   orders,
   onCancelOrder,
+  onDeleteOrder,
   onSelectOrderReceipt,
   isMaster = true,
   store,
@@ -60,6 +62,10 @@ export const TransactionHistoryView: React.FC<TransactionHistoryViewProps> = ({
   const [isCancelling, setIsCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
 
+  const [orderToDelete, setOrderToDelete] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   const handleCancelOrder = (orderId: string) => {
     setCancelError(null);
     setOrderToCancel(orderId);
@@ -78,6 +84,27 @@ export const TransactionHistoryView: React.FC<TransactionHistoryViewProps> = ({
       sounds.playError();
     } finally {
       setIsCancelling(false);
+    }
+  };
+
+  const handleRequestDeleteOrder = (orderId: string) => {
+    setDeleteError(null);
+    setOrderToDelete(orderId);
+  };
+
+  const confirmDeleteOrder = async () => {
+    if (!orderToDelete || !onDeleteOrder || isDeleting) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await onDeleteOrder(orderToDelete);
+      sounds.playItemBeep();
+      setOrderToDelete(null);
+    } catch {
+      setDeleteError('Gagal menghapus pesanan di server. Pastikan Anda masuk sebagai Master/Owner.');
+      sounds.playError();
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -255,7 +282,7 @@ export const TransactionHistoryView: React.FC<TransactionHistoryViewProps> = ({
                       <div className="flex items-center justify-end gap-1.5">
                         <button
                           onClick={() => onSelectOrderReceipt(order)}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 text-xs font-semibold transition-colors"
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 text-xs font-semibold transition-colors cursor-pointer"
                           title="Cetak ulang struk ke printer Bluetooth"
                         >
                           <Printer className="w-3.5 h-3.5" />
@@ -265,10 +292,21 @@ export const TransactionHistoryView: React.FC<TransactionHistoryViewProps> = ({
                         {isMaster && order.status === 'completed' && (
                           <button
                             onClick={() => handleCancelOrder(order.id)}
-                            className="p-1 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors"
-                            title="Batalkan transaksi"
+                            className="p-1.5 rounded-lg hover:bg-amber-50 text-slate-400 hover:text-amber-600 transition-colors cursor-pointer"
+                            title="Batalkan status transaksi"
+                          >
+                            <XCircle className="w-4 h-4" />
+                          </button>
+                        )}
+
+                        {isMaster && onDeleteOrder && (
+                          <button
+                            onClick={() => handleRequestDeleteOrder(order.id)}
+                            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-semibold transition-colors cursor-pointer"
+                            title="Hapus pesanan ini secara permanen"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
+                            <span>Hapus</span>
                           </button>
                         )}
                       </div>
@@ -310,9 +348,47 @@ export const TransactionHistoryView: React.FC<TransactionHistoryViewProps> = ({
                 type="button"
                 disabled={isCancelling}
                 onClick={() => void confirmCancelOrder()}
-                className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs disabled:opacity-50"
+                className="px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-xs disabled:opacity-50"
               >
                 {isCancelling ? 'Memproses...' : 'Batalkan'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Permanent Delete Order Confirmation Modal (Master/Owner Only) */}
+      {orderToDelete && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full shadow-2xl border border-slate-200 p-6 text-center space-y-4 animate-in fade-in zoom-in-95">
+            <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-900">Hapus Pesanan Permanen?</h3>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                Yakin ingin menghapus pesanan <strong>#{orderToDelete}</strong>? Pesanan ini akan dihapus permanen dari riwayat transaksi dan laporan penjualan.
+              </p>
+              {deleteError && (
+                <p className="text-xs text-rose-600 font-semibold mt-2">{deleteError}</p>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setOrderToDelete(null)}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-100 disabled:opacity-50 cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => void confirmDeleteOrder()}
+                className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs disabled:opacity-50 cursor-pointer"
+              >
+                {isDeleting ? 'Menghapus...' : 'Ya, Hapus'}
               </button>
             </div>
           </div>

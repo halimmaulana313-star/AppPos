@@ -34,6 +34,7 @@ service cloud.firestore {
     function isVerifiedBootstrapAdmin() {
       return isVerifiedEmail() && (
         request.auth.token.email == 'halimmaulana133@gmail.com' ||
+        request.auth.token.email == 'halimmaulana313@gmail.com' ||
         request.auth.token.email == 'haimmaulana313@gmail.com'
       );
     }
@@ -41,6 +42,7 @@ service cloud.firestore {
     function isAdmin() {
       return isVerifiedEmail() && (
         request.auth.token.email == 'halimmaulana133@gmail.com' ||
+        request.auth.token.email == 'halimmaulana313@gmail.com' ||
         request.auth.token.email == 'haimmaulana313@gmail.com' ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
@@ -294,7 +296,7 @@ service cloud.firestore {
       allow list: if isSignedIn() && (
         isVerifiedBootstrapAdmin() ||
         resource.data.ownerUid == request.auth.uid ||
-        (resource.data.staffUids is list && resource.data.staffUids.size() <= 20 && request.auth.uid in resource.data.staffUids)
+        request.auth.uid in resource.data.staffUids
       );
       allow create: if isVerifiedEmail() && isValidId(storeId) &&
         isValidStoreProfile(incoming()) &&
@@ -333,7 +335,7 @@ service cloud.firestore {
       allow list: if isSignedIn() && (
         isVerifiedBootstrapAdmin() ||
         resource.data.ownerUid == request.auth.uid ||
-        (resource.data.staffUids is list && resource.data.staffUids.size() <= 20 && request.auth.uid in resource.data.staffUids)
+        request.auth.uid in resource.data.staffUids
       );
       allow create: if isVerifiedEmail() && isValidId(productId) &&
         isValidProduct(incoming()) &&
@@ -381,7 +383,7 @@ service cloud.firestore {
         isVerifiedBootstrapAdmin() ||
         resource.data.ownerUid == request.auth.uid ||
         resource.data.cashierUid == request.auth.uid ||
-        (resource.data.staffUids is list && resource.data.staffUids.size() <= 20 && request.auth.uid in resource.data.staffUids)
+        request.auth.uid in resource.data.staffUids
       );
       allow create: if isVerifiedEmail() && isValidId(orderId) &&
         isValidPosOrder(incoming()) &&
@@ -425,7 +427,7 @@ service cloud.firestore {
           isVerifiedBootstrapAdmin() ||
           resource.data.ownerUid == request.auth.uid ||
           resource.data.cashierUid == request.auth.uid ||
-          ('staffUids' in resource.data && resource.data.staffUids is list && resource.data.staffUids.size() <= 20 && request.auth.uid in resource.data.staffUids)
+          request.auth.uid in resource.data.staffUids
         );
         allow create: if isVerifiedEmail() && isValidId(orderId) && isValidId(itemId) &&
           isValidOrderLineItem(incoming()) &&

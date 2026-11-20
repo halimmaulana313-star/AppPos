@@ -28,6 +28,7 @@ import {
   Sparkles,
   Sun,
   Sunrise,
+  Trash2,
   TrendingUp,
   Wallet,
 } from 'lucide-react';
@@ -52,6 +53,8 @@ interface DailyReportsViewProps {
   store: StoreProfile;
   printerConfig: PrinterConfig;
   printerState: BluetoothPrinterState;
+  isMaster?: boolean;
+  onDeleteOrder?: (orderId: string) => Promise<void>;
   onOpenPrinterModal: () => void;
   onSelectOrderReceipt: (order: Order) => void;
   onOpenReportReceiptModal: (report: DailySalesReport) => void;
@@ -62,6 +65,8 @@ export const DailyReportsView: React.FC<DailyReportsViewProps> = ({
   store,
   printerConfig,
   printerState,
+  isMaster = false,
+  onDeleteOrder,
   onOpenPrinterModal,
   onSelectOrderReceipt,
   onOpenReportReceiptModal,
@@ -209,6 +214,25 @@ export const DailyReportsView: React.FC<DailyReportsViewProps> = ({
   };
 
   const [isTableReportModalOpen, setIsTableReportModalOpen] = useState<boolean>(false);
+  const [orderToDelete, setOrderToDelete] = useState<string | null>(null);
+  const [isDeletingOrder, setIsDeletingOrder] = useState<boolean>(false);
+  const [deleteOrderError, setDeleteOrderError] = useState<string | null>(null);
+
+  const handleConfirmDeleteOrder = async () => {
+    if (!orderToDelete || !onDeleteOrder || isDeletingOrder) return;
+    setIsDeletingOrder(true);
+    setDeleteOrderError(null);
+    try {
+      await onDeleteOrder(orderToDelete);
+      sounds.playItemBeep();
+      setOrderToDelete(null);
+    } catch {
+      setDeleteOrderError('Gagal menghapus pesanan di server. Pastikan hak akses Master aktif.');
+      sounds.playError();
+    } finally {
+      setIsDeletingOrder(false);
+    }
+  };
 
   const handleExportCSV = () => {
     sounds.playCashRegister();
@@ -1169,13 +1193,29 @@ export const DailyReportsView: React.FC<DailyReportsViewProps> = ({
                         {formatRupiah(tx.total)}
                       </td>
                       <td className="py-3 pr-2 text-right">
-                        <button
-                          onClick={() => onSelectOrderReceipt(tx)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 text-xs font-semibold transition-colors"
-                        >
-                          <Printer className="w-3.5 h-3.5" />
-                          <span>Struk</span>
-                        </button>
+                        <div className="inline-flex items-center justify-end gap-1.5">
+                          <button
+                            onClick={() => onSelectOrderReceipt(tx)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 text-xs font-semibold transition-colors cursor-pointer"
+                          >
+                            <Printer className="w-3.5 h-3.5" />
+                            <span>Struk</span>
+                          </button>
+                          {isMaster && onDeleteOrder && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDeleteOrderError(null);
+                                setOrderToDelete(tx.id);
+                              }}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-semibold transition-colors cursor-pointer"
+                              title="Hapus pesanan ini"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Hapus</span>
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1193,6 +1233,44 @@ export const DailyReportsView: React.FC<DailyReportsViewProps> = ({
         report={report}
         store={store}
       />
+
+      {/* Delete Order Confirmation Modal */}
+      {orderToDelete && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full shadow-2xl border border-slate-200 p-6 text-center space-y-4 animate-in fade-in zoom-in-95">
+            <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-900">Hapus Pesanan Permanen?</h3>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                Yakin ingin menghapus pesanan <strong>#{orderToDelete}</strong>? Pesanan ini akan dihapus permanen dari laporan penjualan dan riwayat transaksi.
+              </p>
+              {deleteOrderError && (
+                <p className="text-xs text-rose-600 font-semibold mt-2">{deleteOrderError}</p>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isDeletingOrder}
+                onClick={() => setOrderToDelete(null)}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-100 disabled:opacity-50 cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingOrder}
+                onClick={() => void handleConfirmDeleteOrder()}
+                className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs disabled:opacity-50 cursor-pointer"
+              >
+                {isDeletingOrder ? 'Menghapus...' : 'Ya, Hapus'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

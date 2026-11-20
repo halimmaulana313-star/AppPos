@@ -53,6 +53,7 @@ import { useFirebase } from './contexts/FirebaseContext';
 import { auth } from './lib/firebase';
 import {
   decrementProductsStockInFirestore,
+  deletePosOrderFromFirestore,
   isBootstrapAdminUser,
   savePosOrderToFirestore,
   seedInitialStoreAndProductsIfEmpty,
@@ -253,6 +254,7 @@ export default function App() {
   const skipNextFirestoreStorePushRef = useRef<boolean>(false);
   const skipNextFirestoreProductsPushRef = useRef<boolean>(false);
   const isCompletingOrderRef = useRef<boolean>(false);
+  const deletedOrderIdsRef = useRef<Set<string>>(new Set());
 
   // Hydrate Firebase Auth user & attach Firestore real-time listeners when authenticated
   useEffect(() => {
@@ -348,13 +350,26 @@ export default function App() {
             firebaseUser.uid,
             isBootstrap,
             syncedUser.role === 'master',
-            (remoteOrders) => {
-              if (!active || remoteOrders.length === 0) return;
+            (remoteOrders, removedOrderIds) => {
+              if (!active) return;
+              if (remoteOrders.length === 0 && removedOrderIds.length === 0) return;
+              const removedSet = new Set(removedOrderIds);
+              removedOrderIds.forEach((id) => deletedOrderIdsRef.current.add(id));
               setOrders((prev) => {
                 const map = new Map<string, Order>();
-                for (const ro of remoteOrders) map.set(ro.id, ro);
+                for (const ro of remoteOrders) {
+                  if (!deletedOrderIdsRef.current.has(ro.id)) {
+                    map.set(ro.id, ro);
+                  }
+                }
                 for (const lo of prev) {
-                  if (!map.has(lo.id)) map.set(lo.id, lo);
+                  if (
+                    !map.has(lo.id) &&
+                    !removedSet.has(lo.id) &&
+                    !deletedOrderIdsRef.current.has(lo.id)
+                  ) {
+                    map.set(lo.id, lo);
+                  }
                 }
                 return Array.from(map.values()).sort(
                   (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
@@ -647,6 +662,21 @@ export default function App() {
     );
   };
 
+  // Permanently delete order (Master only) with Firestore sync
+  const handleDeleteOrderInFirestore = async (orderId: string) => {
+    if (currentUser?.role !== 'master') return;
+    deletedOrderIdsRef.current.add(orderId);
+    if (authReady && firebaseUser) {
+      try {
+        await deletePosOrderFromFirestore(orderId);
+      } catch (err) {
+        deletedOrderIdsRef.current.delete(orderId);
+        throw err;
+      }
+    }
+    setOrders((prev) => prev.filter((o) => o.id !== orderId));
+  };
+
   // Quick connect trigger from navbar
   const handleQuickConnect = async () => {
     if (!printerState.isSupported) {
@@ -814,6 +844,8 @@ export default function App() {
               store={store}
               printerConfig={printerConfig}
               printerState={printerState}
+              isMaster={isMaster}
+              onDeleteOrder={handleDeleteOrderInFirestore}
               onOpenPrinterModal={() => setIsPrinterModalOpen(true)}
               onSelectOrderReceipt={(order) => {
                 setReceiptOrder(order);
@@ -830,6 +862,7 @@ export default function App() {
             <TransactionHistoryView
               orders={orders}
               onCancelOrder={handleCancelOrderInFirestore}
+              onDeleteOrder={handleDeleteOrderInFirestore}
               isMaster={isMaster}
               store={store}
               onSelectOrderReceipt={(order) => {

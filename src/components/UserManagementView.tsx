@@ -207,7 +207,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
             </span>
           </div>
           <p className="text-sm text-slate-500 mt-1">
-            Atur peran (Kasir / Master) dan status aktif staf yang telah masuk menggunakan Google Sign-In.
+            Atur peran (Kasir / Master) dan status aktif staf yang telah masuk menggunakan Email atau Google Sign-In.
           </p>
         </div>
       </div>
@@ -220,10 +220,10 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
           </div>
           <div>
             <h4 className="text-xs font-bold text-blue-950 uppercase tracking-wider">
-              Otentikasi Google & Kontrol Hak Akses (RBAC)
+              Otentikasi Firebase & Kontrol Hak Akses (RBAC)
             </h4>
             <p className="text-xs text-blue-800 mt-0.5 leading-relaxed">
-              Setiap staf baru mendaftar otomatis sebagai <strong>Kasir</strong> saat pertama kali masuk dengan akun Google mereka (tanpa kata sandi lokal yang rentan bocor). Master dapat mengaktifkan, menonaktifkan, atau mengubah peran staf di sini.
+              Setiap staf baru mendaftar otomatis sebagai <strong>Kasir</strong> saat pertama kali masuk dengan email terverifikasi atau akun Google mereka. Master dapat mengaktifkan, menonaktifkan, atau mengubah peran staf di sini.
             </p>
             {!isBootstrapAdmin && (
               <p className="text-[11px] text-indigo-800 mt-1.5 flex items-center gap-1 font-semibold">

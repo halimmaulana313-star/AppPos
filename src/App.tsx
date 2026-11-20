@@ -50,6 +50,7 @@ import {
 } from './utils/sanitize';
 import { sounds } from './utils/soundEffects';
 import { useFirebase } from './contexts/FirebaseContext';
+import { auth } from './lib/firebase';
 import {
   decrementProductsStockInFirestore,
   isBootstrapAdminUser,
@@ -72,7 +73,7 @@ const STORAGE_KEY_ORDERS = 'kasirku_orders_v1';
 const STORAGE_KEY_PRINTER = 'kasirku_printer_v1';
 
 export default function App() {
-  const { firebaseUser, authReady, signOutFirebase } = useFirebase();
+  const { firebaseUser, authReady, reloadAuthUser, signOutFirebase } = useFirebase();
 
   // Navigation
   const [activeTab, setActiveTab] = useState<ActiveTab>('pos');
@@ -267,13 +268,14 @@ export default function App() {
       return;
     }
 
+    const activeAuthUser = auth.currentUser ?? firebaseUser;
     let active = true;
-    const isBootstrap = isBootstrapAdminUser(firebaseUser);
+    const isBootstrap = isBootstrapAdminUser(activeAuthUser);
     const unsubscribers: Array<() => void> = [];
     setIsResolvingProfile(true);
     setAuthError(null);
 
-    void syncFirebaseUserProfile(firebaseUser)
+    void syncFirebaseUserProfile(activeAuthUser)
       .then((syncedUser) => {
         if (!active) return;
         if (!syncedUser.isActive) {
@@ -716,9 +718,13 @@ export default function App() {
         authReady={authReady}
         isResolvingProfile={isResolvingProfile}
         signedInEmail={firebaseUser?.email}
+        isEmailVerified={Boolean(firebaseUser?.emailVerified)}
         externalError={authError}
         onClearExternalError={() => setAuthError(null)}
-        onRetrySync={() => setProfileRetryNonce((n) => n + 1)}
+        onRetrySync={async () => {
+          await reloadAuthUser();
+          setProfileRetryNonce((n) => n + 1);
+        }}
       />
     );
   }

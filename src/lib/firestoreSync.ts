@@ -31,6 +31,10 @@ import {
 import { sanitizeSafeImageUrl } from '../utils/sanitize';
 import { OperationType, auth, db, handleFirestoreError } from './firebase';
 
+export const BOOTSTRAP_ADMIN_EMAILS = [
+  'halimmaulana133@gmail.com',
+  'kopiliterasi12@gmail.com',
+] as const;
 export const BOOTSTRAP_ADMIN_EMAIL = 'halimmaulana133@gmail.com';
 export const DEFAULT_STORE_DOC_ID = 'default';
 
@@ -77,10 +81,11 @@ function buildStaffUids(ownerUid: string, extraUids: string[] = []): string[] {
 }
 
 export function isBootstrapAdminUser(user: User | null): boolean {
+  const normalizedEmail = user?.email?.trim().toLowerCase() || '';
   return Boolean(
     user &&
       user.emailVerified &&
-      user.email?.trim().toLowerCase() === BOOTSTRAP_ADMIN_EMAIL
+      (BOOTSTRAP_ADMIN_EMAILS as readonly string[]).includes(normalizedEmail)
   );
 }
 

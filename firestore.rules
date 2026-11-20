@@ -32,12 +32,16 @@ service cloud.firestore {
     }
 
     function isVerifiedBootstrapAdmin() {
-      return isVerifiedEmail() && request.auth.token.email == 'halimmaulana133@gmail.com';
+      return isVerifiedEmail() && (
+        request.auth.token.email == 'halimmaulana133@gmail.com' ||
+        request.auth.token.email == 'kopiliterasi12@gmail.com'
+      );
     }
 
     function isAdmin() {
       return isVerifiedEmail() && (
         request.auth.token.email == 'halimmaulana133@gmail.com' ||
+        request.auth.token.email == 'kopiliterasi12@gmail.com' ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }

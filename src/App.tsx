@@ -722,8 +722,12 @@ export default function App() {
         externalError={authError}
         onClearExternalError={() => setAuthError(null)}
         onRetrySync={async () => {
-          await reloadAuthUser();
-          setProfileRetryNonce((n) => n + 1);
+          const verified = await reloadAuthUser();
+          if (verified) {
+            setAuthError(null);
+            setProfileRetryNonce((n) => n + 1);
+          }
+          return verified;
         }}
       />
     );

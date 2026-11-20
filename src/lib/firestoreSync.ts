@@ -34,6 +34,7 @@ import { OperationType, auth, db, handleFirestoreError } from './firebase';
 export const BOOTSTRAP_ADMIN_EMAILS = [
   'halimmaulana133@gmail.com',
   'kopiliterasi12@gmail.com',
+  'kopilietras12@gmail.com',
 ] as const;
 export const BOOTSTRAP_ADMIN_EMAIL = 'halimmaulana133@gmail.com';
 export const DEFAULT_STORE_DOC_ID = 'default';
@@ -390,9 +391,12 @@ export async function syncProductsBatchToFirestore(
   const actorUid = sanitizeFirestoreId(auth.currentUser?.uid || safeOwnerUid, 'usr');
   const boundedStaff = buildStaffUids(safeOwnerUid, [actorUid, ...staffUids]);
 
+  const isBootstrapActor = isBootstrapAdminUser(auth.currentUser);
   const existingDocs = await (async () => {
     try {
-      const q = query(collection(db, 'products'), where('staffUids', 'array-contains', actorUid));
+      const q = isBootstrapActor
+        ? collection(db, 'products')
+        : query(collection(db, 'products'), where('staffUids', 'array-contains', actorUid));
       const snap = await getDocs(q);
       return new Set(snap.docs.map((d) => d.id));
     } catch (err) {

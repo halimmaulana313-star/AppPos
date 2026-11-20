@@ -6,74 +6,81 @@
 import React, { useState } from 'react';
 import {
   AlertCircle,
-  ArrowRight,
   Coffee,
-  Eye,
-  EyeOff,
-  KeyRound,
-  Lock,
-  Mail,
+  ShieldCheck,
 } from 'lucide-react';
 import { AppUser, StoreProfile } from '../types/pos';
+import { useFirebase } from '../contexts/FirebaseContext';
+import { syncFirebaseUserProfile } from '../lib/firestoreSync';
 import { sounds } from '../utils/soundEffects';
 
 interface LoginPageProps {
   store: StoreProfile;
-  users: AppUser[];
+  authReady: boolean;
+  isResolvingProfile: boolean;
+  externalError?: string | null;
+  onClearExternalError?: () => void;
   onLogin: (user: AppUser) => void;
 }
 
-export const LoginPage: React.FC<LoginPageProps> = ({ store, users, onLogin }) => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
+export const LoginPage: React.FC<LoginPageProps> = ({
+  store,
+  authReady,
+  isResolvingProfile,
+  externalError,
+  onClearExternalError,
+  onLogin,
+}) => {
+  const { signInWithGoogle, signOutFirebase, isAuthenticating } = useFirebase();
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
+  const displayedError = errorMessage || externalError;
+
+  const handleGoogleSignIn = async () => {
     setErrorMessage(null);
-
-    const trimmedEmail = email.trim().toLowerCase();
-    const trimmedPass = password.trim();
-
-    if (!trimmedEmail || !trimmedPass) {
-      setErrorMessage('Silakan masukkan email dan kata sandi Anda.');
-      sounds.playError();
-      return;
-    }
-
+    onClearExternalError?.();
     setIsLoading(true);
-
-    setTimeout(() => {
-      // Find matching user (case-insensitive email matching)
-      const matched = users.find(
-        (u) => u.email.trim().toLowerCase() === trimmedEmail && u.password === trimmedPass
-      );
-
-      if (!matched) {
-        setIsLoading(false);
-        setErrorMessage('Email atau kata sandi tidak cocok. Silakan coba lagi.');
+    try {
+      const fbUser = await signInWithGoogle();
+      const syncedUser = await syncFirebaseUserProfile(fbUser);
+      if (!syncedUser.isActive) {
+        await signOutFirebase();
+        setErrorMessage(
+          'Akun ini sedang dinonaktifkan oleh Master Toko. Hubungi pemilik toko untuk mengaktifkan kembali.'
+        );
         sounds.playError();
         return;
       }
-
-      if (!matched.isActive) {
-        setIsLoading(false);
-        setErrorMessage('Akun ini sedang dinonaktifkan oleh Master Toko. Hubungi pemilik untuk mengaktifkan.');
-        sounds.playError();
-        return;
-      }
-
-      // Success
-      setIsLoading(false);
       sounds.playCashRegister();
-      onLogin({
-        ...matched,
-        lastLogin: new Date().toISOString(),
-      });
-    }, 250);
+      onLogin(syncedUser);
+    } catch (err) {
+      const code = (err as { code?: string })?.code || '';
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        code.includes('popup-closed-by-user') ||
+        code.includes('cancelled-popup-request') ||
+        msg.includes('popup-closed-by-user') ||
+        msg.includes('cancelled-popup-request')
+      ) {
+        return;
+      }
+      if (code.includes('popup-blocked') || msg.includes('popup-blocked')) {
+        setErrorMessage(
+          'Pop-up masuk Google diblokir oleh browser. Izinkan pop-up untuk situs ini lalu coba lagi.'
+        );
+      } else if (code.includes('network-request-failed') || msg.includes('network-request-failed')) {
+        setErrorMessage('Koneksi internet bermasalah. Periksa jaringan Anda dan coba lagi.');
+      } else {
+        setErrorMessage('Gagal masuk dengan akun Google terverifikasi. Silakan coba lagi.');
+      }
+      sounds.playError();
+    } finally {
+      setIsLoading(false);
+    }
   };
+
+  const busy = !authReady || isResolvingProfile || isLoading || isAuthenticating;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-950 flex flex-col justify-center py-12 sm:px-6 lg:px-8 px-4 text-slate-100">
@@ -106,92 +113,67 @@ export const LoginPage: React.FC<LoginPageProps> = ({ store, users, onLogin }) =
           {/* Header text */}
           <div className="mb-6 pb-4 border-b border-slate-700/80 text-center">
             <h2 className="text-lg font-bold text-white flex items-center justify-center gap-2">
-              <Lock className="w-4 h-4 text-emerald-400" />
+              <ShieldCheck className="w-5 h-5 text-emerald-400" />
               Masuk ke Aplikasi
             </h2>
             <p className="text-xs text-slate-400 mt-1">
-              Masukkan email dan kata sandi akun Anda untuk melanjutkan
+              Otentikasi aman menggunakan akun Google terverifikasi Firebase
             </p>
           </div>
 
           {/* Error Alert */}
-          {errorMessage && (
-            <div className="mb-5 p-3.5 rounded-xl bg-rose-950/80 border border-rose-800/80 text-rose-200 text-xs flex items-start gap-2.5 animate-shake">
+          {displayedError && (
+            <div className="mb-5 p-3.5 rounded-xl bg-rose-950/80 border border-rose-800/80 text-rose-200 text-xs flex items-start gap-2.5">
               <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-              <span>{errorMessage}</span>
+              <span>{displayedError}</span>
             </div>
           )}
 
-          {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Alamat Email
-              </label>
-              <div className="relative rounded-xl shadow-inner">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                  <Mail className="w-4 h-4" />
-                </div>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="Masukkan email terdaftar"
-                  autoComplete="email"
-                  required
-                  className="block w-full pl-10 pr-3.5 py-2.5 bg-slate-900/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
-                />
-              </div>
-            </div>
+          {/* Google Sign-In Button */}
+          <button
+            type="button"
+            onClick={handleGoogleSignIn}
+            disabled={busy}
+            className="w-full py-3 px-4 rounded-xl font-bold text-sm bg-white hover:bg-slate-100 text-slate-900 shadow-lg transition-all flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-60 disabled:cursor-wait"
+          >
+            {busy ? (
+              <>
+                <div className="w-4 h-4 border-2 border-slate-300 border-t-emerald-600 rounded-full animate-spin" />
+                <span>Memverifikasi Sesi...</span>
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    fill="#4285F4"
+                    d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
+                  />
+                  <path
+                    fill="#34A853"
+                    d="M12 24c3.3 0 6.08-1.09 8.1-2.96l-3.88-3.05c-1.1.74-2.51 1.18-4.22 1.18-3.24 0-5.99-2.19-6.97-5.13H1.04v3.14C3.05 21.18 7.21 24 12 24Z"
+                  />
+                  <path
+                    fill="#FBBC05"
+                    d="M5.03 14.04c-.25-.74-.39-1.54-.39-2.36 0-.82.14-1.62.39-2.36V6.18H1.04C.38 7.5 0 8.99 0 10.68s.38 3.18 1.04 4.5l3.99-1.14Z"
+                  />
+                  <path
+                    fill="#EA4335"
+                    d="M12 4.75c1.79 0 3.41.62 4.68 1.83l3.51-3.51C18.07 1.09 15.3 0 12 0 7.21 0 3.05 2.82 1.04 6.96l3.99 3.14c.98-2.94 3.73-5.35 6.97-5.35Z"
+                  />
+                </svg>
+                <span>Masuk dengan Google</span>
+              </>
+            )}
+          </button>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Kata Sandi
-              </label>
-              <div className="relative rounded-xl shadow-inner">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                  <KeyRound className="w-4 h-4" />
-                </div>
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Masukkan kata sandi"
-                  autoComplete="current-password"
-                  required
-                  className="block w-full pl-10 pr-10 py-2.5 bg-slate-900/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-200 cursor-pointer"
-                  title={showPassword ? "Sembunyikan kata sandi" : "Tampilkan kata sandi"}
-                >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full mt-2 py-3 px-4 rounded-xl font-bold text-sm bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white shadow-lg shadow-emerald-900/40 hover:shadow-emerald-900/60 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-            >
-              {isLoading ? (
-                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              ) : (
-                <>
-                  <span>Masuk ke Akun</span>
-                  <ArrowRight className="w-4 h-4" />
-                </>
-              )}
-            </button>
-          </form>
+          <div className="mt-5 p-3.5 rounded-xl bg-slate-900/70 border border-slate-700/70 text-[11px] text-slate-400 leading-relaxed">
+            Staf kasir baru dapat langsung masuk menggunakan akun Google masing-masing. Akses akan otomatis terdaftar sebagai <strong className="text-slate-200">Kasir</strong> dan dapat dikelola oleh Master Toko.
+          </div>
         </div>
 
         {/* Footer info */}
         <p className="mt-4 text-center text-xs text-slate-500">
-          Dilindungi oleh sistem otorisasi peran (RBAC) KasirKu v2.0
+          Dilindungi oleh Firebase Auth & Kontrol Akses Peran (RBAC)
         </p>
       </div>
     </div>

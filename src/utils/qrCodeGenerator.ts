@@ -40,21 +40,6 @@ export async function generateQRCodeDataUrl(
 }
 
 /**
- * Build customer ordering URL for a specific table or takeaway
- */
-export function buildCustomerOrderUrl(tableNumber?: string): string {
-  if (typeof window === 'undefined') return '';
-  const origin = window.location.origin;
-  const pathname = window.location.pathname;
-  const params = new URLSearchParams();
-  params.set('mode', 'order');
-  if (tableNumber) {
-    params.set('table', tableNumber);
-  }
-  return `${origin}${pathname}?${params.toString()}`;
-}
-
-/**
  * Compute CRC16-CCITT (0xFFFF) checksum for EMVCo QRIS payloads
  */
 function crc16Ccitt(str: string): string {
@@ -109,9 +94,40 @@ export function buildQrisPayload(params: {
   return body + crc16Ccitt(body);
 }
 
+import { sanitizeFilename, sanitizeSafeImageUrl } from './sanitize';
+
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/webp',
+]);
+const MAX_IMAGE_FILE_BYTES = 3 * 1024 * 1024;
+
+function validateUploadedRasterFile(file: File): void {
+  if (!ALLOWED_IMAGE_MIME_TYPES.has(file.type.toLowerCase())) {
+    throw new Error('Format file harus PNG, JPG, atau WebP.');
+  }
+  if (file.size <= 0 || file.size > MAX_IMAGE_FILE_BYTES) {
+    throw new Error('Ukuran gambar tidak valid atau melebihi batas 3MB.');
+  }
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const result = ev.target?.result;
+      if (typeof result === 'string') resolve(result);
+      else reject(new Error('Gagal membaca file gambar.'));
+    };
+    reader.onerror = () => reject(new Error('Gagal membaca file gambar.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 /**
- * Resolve the store's exact QRIS barcode image URL so Cashier POS, Store Settings,
- * and Customer Online Portal always display the identical QRIS Toko barcode.
+ * Resolve the store's exact QRIS barcode image URL for Cashier POS and Store Settings.
  */
 export async function getStoreQrisImageDataUrl(store: {
   qrisImageUrl?: string;
@@ -119,8 +135,12 @@ export async function getStoreQrisImageDataUrl(store: {
   storeName: string;
   qrisNmid?: string;
 }): Promise<string> {
-  if (store.qrisImageUrl) {
-    return store.qrisImageUrl;
+  const safeCustomQris = sanitizeSafeImageUrl(store.qrisImageUrl, {
+    allowPresetSvg: false,
+    maxLength: 350_000,
+  });
+  if (safeCustomQris) {
+    return safeCustomQris;
   }
   const payload = buildQrisPayload({
     merchantName: store.qrisMerchantName || store.storeName,
@@ -131,34 +151,25 @@ export async function getStoreQrisImageDataUrl(store: {
 }
 
 /**
- * Optimize an uploaded QRIS image file so large camera photos fit safely in localStorage
- * and sync rapidly over SSE/REST to all cashier & customer portal devices.
+ * Validate & re-encode an uploaded QRIS image through HTML5 canvas so EXIF/polyglots are stripped
+ * and size fits reliably within Firestore & localStorage limits.
  */
 export async function optimizeQrisImageFile(
   file: File,
   maxDimension: number = 900
 ): Promise<string> {
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const result = ev.target?.result;
-      if (typeof result === 'string') resolve(result);
-      else reject(new Error('Gagal membaca file gambar QRIS.'));
-    };
-    reader.onerror = () => reject(new Error('Gagal membaca file gambar QRIS.'));
-    reader.readAsDataURL(file);
-  });
+  validateUploadedRasterFile(file);
+  const rawDataUrl = await readFileAsDataUrl(file);
 
-  // If already compact (< 300KB), keep original pixel-perfect image
-  if (dataUrl.length < 300_000) {
-    return dataUrl;
-  }
-
-  return new Promise<string>((resolve) => {
+  return new Promise<string>((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
       try {
-        const scale = Math.min(1, maxDimension / Math.max(img.width || 1, img.height || 1));
+        if (!img.width || !img.height) {
+          reject(new Error('File gambar QRIS rusak atau berdimensi 0.'));
+          return;
+        }
+        const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
         const targetW = Math.max(1, Math.round(img.width * scale));
         const targetH = Math.max(1, Math.round(img.height * scale));
         const canvas = document.createElement('canvas');
@@ -166,7 +177,7 @@ export async function optimizeQrisImageFile(
         canvas.height = targetH;
         const ctx = canvas.getContext('2d');
         if (!ctx) {
-          resolve(dataUrl);
+          reject(new Error('Canvas browser tidak tersedia untuk memproses gambar.'));
           return;
         }
         ctx.fillStyle = '#ffffff';
@@ -174,17 +185,72 @@ export async function optimizeQrisImageFile(
         ctx.drawImage(img, 0, 0, targetW, targetH);
 
         const pngUrl = canvas.toDataURL('image/png');
-        if (pngUrl.length <= 450_000) {
+        if (pngUrl.length <= 340_000) {
           resolve(pngUrl);
           return;
         }
-        resolve(canvas.toDataURL('image/jpeg', 0.88));
+        const jpgUrl = canvas.toDataURL('image/jpeg', 0.88);
+        if (jpgUrl.length <= 340_000) {
+          resolve(jpgUrl);
+          return;
+        }
+        resolve(canvas.toDataURL('image/jpeg', 0.72));
       } catch {
-        resolve(dataUrl);
+        reject(new Error('Gagal memproses gambar QRIS.'));
       }
     };
-    img.onerror = () => resolve(dataUrl);
-    img.src = dataUrl;
+    img.onerror = () => reject(new Error('File bukan gambar PNG/JPG/WebP yang valid.'));
+    img.src = rawDataUrl;
+  });
+}
+
+/**
+ * Validate & re-encode an uploaded store logo image through canvas (stripping EXIF/scripts).
+ */
+export async function optimizeLogoImageFile(
+  file: File,
+  maxDimension: number = 512
+): Promise<string> {
+  validateUploadedRasterFile(file);
+  const rawDataUrl = await readFileAsDataUrl(file);
+
+  return new Promise<string>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        if (!img.width || !img.height) {
+          reject(new Error('File logo rusak atau berdimensi 0.'));
+          return;
+        }
+        const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+        const targetW = Math.max(1, Math.round(img.width * scale));
+        const targetH = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Canvas browser tidak tersedia untuk memproses logo.'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, targetW, targetH);
+        const pngUrl = canvas.toDataURL('image/png');
+        if (pngUrl.length <= 340_000) {
+          resolve(pngUrl);
+          return;
+        }
+        const webpUrl = canvas.toDataURL('image/webp', 0.85);
+        if (webpUrl.startsWith('data:image/webp') && webpUrl.length <= 340_000) {
+          resolve(webpUrl);
+          return;
+        }
+        resolve(canvas.toDataURL('image/jpeg', 0.85));
+      } catch {
+        reject(new Error('Gagal memproses gambar logo.'));
+      }
+    };
+    img.onerror = () => reject(new Error('File bukan gambar PNG/JPG/WebP yang valid.'));
+    img.src = rawDataUrl;
   });
 }
 
@@ -192,9 +258,12 @@ export async function optimizeQrisImageFile(
  * Download QR Code as PNG file
  */
 export function downloadQRImage(dataUrl: string, fileName: string): void {
+  const safeSrc = sanitizeSafeImageUrl(dataUrl, { allowPresetSvg: false });
+  if (!safeSrc) return;
+  const safeName = sanitizeFilename(fileName.replace(/\.png$/i, ''), 'QR_Code');
   const link = document.createElement('a');
-  link.href = dataUrl;
-  link.download = fileName.endsWith('.png') ? fileName : `${fileName}.png`;
+  link.href = safeSrc;
+  link.download = `${safeName}.png`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

@@ -124,7 +124,6 @@ export interface AppUser {
   id: string;
   name: string;
   email: string;
-  password: string;
   role: UserRole;
   phone?: string;
   isActive: boolean;
@@ -132,31 +131,4 @@ export interface AppUser {
   lastLogin?: string;
 }
 
-export type OnlineOrderStatus = 'pending' | 'accepted' | 'preparing' | 'ready' | 'completed' | 'cancelled';
-
-export interface OnlineOrder {
-  id: string; // e.g. "ONL-20261112-001"
-  orderCode: string; // e.g. "A01" or "M05-1" for quick lookup / barcode
-  timestamp: string; // ISO string
-  customerName: string;
-  customerPhone?: string;
-  orderType: 'dine_in' | 'takeaway' | 'delivery';
-  tableNumber?: string;
-  items: CartItem[];
-  subtotal: number;
-  taxAmount: number;
-  serviceChargeAmount: number;
-  total: number;
-  status: OnlineOrderStatus;
-  notes?: string;
-  rejectionReason?: string;
-  paymentPreference?: 'pay_at_cashier' | 'qris_online';
-  paymentStatus?: 'unpaid' | 'waiting_payment' | 'paid';
-  paidAt?: string;
-  paymentReference?: string;
-  posOrderId?: string;
-  acceptedAt?: string;
-  completedAt?: string;
-}
-
-export type ActiveTab = 'pos' | 'online_orders' | 'table_qr' | 'reports' | 'history' | 'products' | 'users' | 'settings' | 'logo';
+export type ActiveTab = 'pos' | 'reports' | 'history' | 'products' | 'users' | 'settings' | 'logo';

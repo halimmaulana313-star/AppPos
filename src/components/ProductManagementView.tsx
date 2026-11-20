@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { Product } from '../types/pos';
 import { formatRupiah } from '../utils/formatters';
+import { sanitizeSafeImageUrl } from '../utils/sanitize';
 import { sounds } from '../utils/soundEffects';
 
 interface ProductManagementViewProps {
@@ -43,6 +44,7 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
   const [formSku, setFormSku] = useState('');
   const [formImage, setFormImage] = useState('');
   const [formDescription, setFormDescription] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
 
   const [stockStatusFilter, setStockStatusFilter] = useState<'all' | 'low' | 'out'>('all');
 
@@ -88,6 +90,7 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
     setFormSku(`PRD-${Math.floor(100 + Math.random() * 900)}`);
     setFormImage('https://images.unsplash.com/photo-1541167760496-1628856ab772?w=500&auto=format&fit=crop&q=80');
     setFormDescription('');
+    setFormError(null);
     setIsModalOpen(true);
   };
 
@@ -101,6 +104,7 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
     setFormSku(p.sku);
     setFormImage(p.image || '');
     setFormDescription(p.description || '');
+    setFormError(null);
     setIsModalOpen(true);
   };
 
@@ -120,7 +124,37 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formName.trim()) return;
+    setFormError(null);
+
+    const trimmedName = formName.trim().slice(0, 140);
+    if (!trimmedName) {
+      setFormError('Nama produk wajib diisi.');
+      return;
+    }
+
+    const safePrice = Math.round(Math.min(1_000_000_000, Math.max(0, Number(formPrice) || 0)));
+    const safeCostPrice = Math.round(
+      Math.min(1_000_000_000, Math.max(0, Number(formCostPrice) || 0))
+    );
+    const safeStock = Math.floor(Math.min(1_000_000, Math.max(0, Number(formStock) || 0)));
+    const safeSku =
+      formSku.trim().slice(0, 60) ||
+      (editingProduct ? editingProduct.sku : `SKU-${Date.now().toString().slice(-4)}`);
+    const safeDesc = formDescription.trim().slice(0, 500);
+
+    let validatedImage: string | undefined;
+    if (formImage.trim()) {
+      const checked = sanitizeSafeImageUrl(formImage.trim(), {
+        allowPresetSvg: false,
+        maxLength: 300_000,
+      });
+      if (!checked) {
+        setFormError('URL foto tidak valid. Gunakan URL https:// yang valid.');
+        sounds.playError();
+        return;
+      }
+      validatedImage = checked;
+    }
 
     if (editingProduct) {
       // Update
@@ -129,14 +163,14 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
           p.id === editingProduct.id
             ? {
                 ...p,
-                name: formName.trim(),
+                name: trimmedName,
                 category: formCategory,
-                price: Number(formPrice) || 0,
-                costPrice: Number(formCostPrice) || 0,
-                stock: Number(formStock) || 0,
-                sku: formSku.trim(),
-                image: formImage.trim() || undefined,
-                description: formDescription.trim(),
+                price: safePrice,
+                costPrice: safeCostPrice,
+                stock: safeStock,
+                sku: safeSku,
+                image: validatedImage,
+                description: safeDesc,
               }
             : p
         )
@@ -145,14 +179,14 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
       // Create new
       const newProduct: Product = {
         id: `prod-${Date.now()}`,
-        name: formName.trim(),
+        name: trimmedName,
         category: formCategory,
-        price: Number(formPrice) || 0,
-        costPrice: Number(formCostPrice) || 0,
-        stock: Number(formStock) || 0,
-        sku: formSku.trim() || `SKU-${Date.now().toString().slice(-4)}`,
-        image: formImage.trim() || undefined,
-        description: formDescription.trim(),
+        price: safePrice,
+        costPrice: safeCostPrice,
+        stock: safeStock,
+        sku: safeSku,
+        image: validatedImage,
+        description: safeDesc,
       };
       setProducts((prev) => [newProduct, ...prev]);
     }
@@ -260,6 +294,7 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
           <input
             type="text"
             value={searchQuery}
+            maxLength={100}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Cari nama menu atau SKU..."
             className="w-full pl-10 pr-4 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
@@ -440,11 +475,18 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
             </div>
 
             <form onSubmit={handleSave} className="p-6 space-y-4">
+              {formError && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
+                  {formError}
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Nama Produk *</label>
                 <input
                   type="text"
                   required
+                  maxLength={140}
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
                   placeholder="Contoh: Kopi Susu Aren"
@@ -472,6 +514,7 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Kode SKU / Barcode</label>
                   <input
                     type="text"
+                    maxLength={60}
                     value={formSku}
                     onChange={(e) => setFormSku(e.target.value)}
                     placeholder="Contoh: KOP-001"
@@ -485,9 +528,11 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Harga Jual (Rp) *</label>
                   <input
                     type="number"
+                    min={0}
+                    max={1000000000}
                     required
                     value={formPrice}
-                    onChange={(e) => setFormPrice(Number(e.target.value))}
+                    onChange={(e) => setFormPrice(Math.max(0, Number(e.target.value)))}
                     className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
@@ -496,8 +541,10 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Harga Modal / HPP (Rp)</label>
                   <input
                     type="number"
+                    min={0}
+                    max={1000000000}
                     value={formCostPrice}
-                    onChange={(e) => setFormCostPrice(Number(e.target.value))}
+                    onChange={(e) => setFormCostPrice(Math.max(0, Number(e.target.value)))}
                     className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
@@ -508,8 +555,10 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Stok Awal</label>
                   <input
                     type="number"
+                    min={0}
+                    max={1000000}
                     value={formStock}
-                    onChange={(e) => setFormStock(Number(e.target.value))}
+                    onChange={(e) => setFormStock(Math.max(0, Number(e.target.value)))}
                     className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
@@ -518,6 +567,7 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
                   <label className="block text-xs font-semibold text-slate-700 mb-1">URL Foto Produk</label>
                   <input
                     type="url"
+                    maxLength={2000}
                     value={formImage}
                     onChange={(e) => setFormImage(e.target.value)}
                     placeholder="https://..."
@@ -530,6 +580,7 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Deskripsi Singkat</label>
                 <textarea
                   value={formDescription}
+                  maxLength={500}
                   onChange={(e) => setFormDescription(e.target.value)}
                   placeholder="Keterangan bahan, rasa, porsi..."
                   rows={2}

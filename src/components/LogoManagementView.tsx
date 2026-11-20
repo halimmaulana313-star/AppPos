@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { StoreProfile } from '../types/pos';
 import { PRESET_LOGOS, PresetLogo } from '../utils/presetLogos';
+import { optimizeLogoImageFile } from '../utils/qrCodeGenerator';
 import { sounds } from '../utils/soundEffects';
 
 interface LogoManagementViewProps {
@@ -67,8 +68,9 @@ export const LogoManagementView: React.FC<LogoManagementViewProps> = ({
 
   const handleProcessFile = (file: File) => {
     setErrorMessage(null);
-    if (!file.type.startsWith('image/')) {
-      setErrorMessage('Silakan pilih file gambar yang valid (PNG, JPG, SVG, WebP).');
+    const allowedTypes = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp']);
+    if (!allowedTypes.has(file.type.toLowerCase())) {
+      setErrorMessage('Format file tidak didukung. Gunakan gambar PNG, JPG, atau WebP.');
       sounds.playError();
       return;
     }
@@ -80,17 +82,18 @@ export const LogoManagementView: React.FC<LogoManagementViewProps> = ({
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const dataUrl = event.target?.result as string;
-      setPreviewLogo(dataUrl);
-      // Automatically save to store profile
-      setStore((prev) => ({ ...prev, logoUrl: dataUrl }));
-      setSaveSuccess(true);
-      sounds.playCashRegister();
-      setTimeout(() => setSaveSuccess(false), 3000);
-    };
-    reader.readAsDataURL(file);
+    void optimizeLogoImageFile(file)
+      .then((dataUrl) => {
+        setPreviewLogo(dataUrl);
+        setStore((prev) => ({ ...prev, logoUrl: dataUrl }));
+        setSaveSuccess(true);
+        sounds.playCashRegister();
+        setTimeout(() => setSaveSuccess(false), 3000);
+      })
+      .catch(() => {
+        setErrorMessage('Gagal membaca file logo. Pastikan file gambar tidak rusak.');
+        sounds.playError();
+      });
   };
 
   const handleSelectPreset = (preset: PresetLogo) => {
@@ -207,10 +210,11 @@ export const LogoManagementView: React.FC<LogoManagementViewProps> = ({
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                      accept="image/png,image/jpeg,image/webp"
                       className="hidden"
                       onChange={(e) => {
                         const file = e.target.files?.[0];
+                        e.target.value = '';
                         if (file) handleProcessFile(file);
                       }}
                     />
@@ -223,7 +227,7 @@ export const LogoManagementView: React.FC<LogoManagementViewProps> = ({
                       Klik untuk memilih logo atau seret gambar ke sini
                     </p>
                     <p className="text-xs text-slate-400 mt-1">
-                      Mendukung format PNG, JPG, SVG, WebP (Rekomendasi: rasio 1:1 / persegi, maks. 3MB)
+                      Mendukung format PNG, JPG, WebP (Rekomendasi: rasio 1:1 / persegi, maks. 3MB)
                     </p>
 
                     <button

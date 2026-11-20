@@ -12,13 +12,15 @@ import {
   formatRupiah,
   formatTimeOnly,
 } from './formatters';
+import { sanitizeFilename, sanitizeSafeImageUrl } from './sanitize';
 
 /**
- * Convert any image URL / SVG / WebP data URL into a PNG data URL
- * so jsPDF can reliably embed it without format errors.
+ * Convert any validated image URL / raster data URL into a PNG data URL
+ * so jsPDF can reliably embed it without format or XSS risks.
  */
 async function loadImageAsPngDataUrl(src: string): Promise<string | null> {
-  if (!src) return null;
+  const safeSrc = sanitizeSafeImageUrl(src, { allowPresetSvg: true });
+  if (!safeSrc) return null;
   return new Promise((resolve) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
@@ -58,7 +60,7 @@ async function loadImageAsPngDataUrl(src: string): Promise<string | null> {
       resolve(null);
     };
 
-    img.src = src;
+    img.src = safeSrc;
   });
 }
 
@@ -367,8 +369,9 @@ export async function generateOrderReceiptPDF(
     doc.text('Barang yang dibeli tidak dapat ditukar', centerX, y, { align: 'center' });
   }
 
-  const cleanStoreName = store.storeName.replace(/[^a-zA-Z0-9_-]/g, '_');
-  doc.save(`Struk_${order.id}_${cleanStoreName}.pdf`);
+  const cleanStoreName = sanitizeFilename(store.storeName, 'Toko');
+  const cleanOrderId = sanitizeFilename(order.id, 'ORD');
+  doc.save(`Struk_${cleanOrderId}_${cleanStoreName}.pdf`);
 }
 
 /**
@@ -509,6 +512,7 @@ export async function generateDailyReportReceiptPDF(
   y += lineH;
   doc.text('Kasir / Supervisor Toko', centerX, y, { align: 'center' });
 
-  const cleanStoreName = store.storeName.replace(/[^a-zA-Z0-9_-]/g, '_');
-  doc.save(`Laporan_Harian_${report.date}_${cleanStoreName}.pdf`);
+  const cleanStoreName = sanitizeFilename(store.storeName, 'Toko');
+  const cleanDate = sanitizeFilename(report.date, 'tanggal');
+  doc.save(`Laporan_Harian_${cleanDate}_${cleanStoreName}.pdf`);
 }

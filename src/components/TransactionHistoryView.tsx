@@ -21,7 +21,7 @@ import { sounds } from '../utils/soundEffects';
 
 interface TransactionHistoryViewProps {
   orders: Order[];
-  setOrders: React.Dispatch<React.SetStateAction<Order[]>>;
+  onCancelOrder: (orderId: string) => Promise<void>;
   onSelectOrderReceipt: (order: Order) => void;
   isMaster?: boolean;
   store?: StoreProfile;
@@ -29,7 +29,7 @@ interface TransactionHistoryViewProps {
 
 export const TransactionHistoryView: React.FC<TransactionHistoryViewProps> = ({
   orders,
-  setOrders,
+  onCancelOrder,
   onSelectOrderReceipt,
   isMaster = true,
   store,
@@ -57,17 +57,27 @@ export const TransactionHistoryView: React.FC<TransactionHistoryViewProps> = ({
   }, [orders, statusFilter, selectedMethod, searchQuery]);
 
   const [orderToCancel, setOrderToCancel] = useState<string | null>(null);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   const handleCancelOrder = (orderId: string) => {
+    setCancelError(null);
     setOrderToCancel(orderId);
   };
 
-  const confirmCancelOrder = () => {
-    if (orderToCancel) {
-      setOrders((prev) =>
-        prev.map((o) => (o.id === orderToCancel ? { ...o, status: 'cancelled' } : o))
-      );
+  const confirmCancelOrder = async () => {
+    if (!orderToCancel || isCancelling) return;
+    setIsCancelling(true);
+    setCancelError(null);
+    try {
+      await onCancelOrder(orderToCancel);
+      sounds.playItemBeep();
       setOrderToCancel(null);
+    } catch {
+      setCancelError('Gagal membatalkan transaksi di server. Periksa hak akses Master Anda.');
+      sounds.playError();
+    } finally {
+      setIsCancelling(false);
     }
   };
 
@@ -283,21 +293,26 @@ export const TransactionHistoryView: React.FC<TransactionHistoryViewProps> = ({
               <p className="text-xs text-slate-500 mt-1">
                 Yakin ingin membatalkan transaksi <strong>#{orderToCancel}</strong>? Status transaksi ini akan diubah menjadi &ldquo;Dibatalkan&rdquo;.
               </p>
+              {cancelError && (
+                <p className="text-xs text-rose-600 font-semibold mt-2">{cancelError}</p>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-2 pt-2">
               <button
                 type="button"
+                disabled={isCancelling}
                 onClick={() => setOrderToCancel(null)}
-                className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-100"
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-100 disabled:opacity-50"
               >
                 Batal
               </button>
               <button
                 type="button"
-                onClick={confirmCancelOrder}
-                className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs"
+                disabled={isCancelling}
+                onClick={() => void confirmCancelOrder()}
+                className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs disabled:opacity-50"
               >
-                Batalkan
+                {isCancelling ? 'Memproses...' : 'Batalkan'}
               </button>
             </div>
           </div>

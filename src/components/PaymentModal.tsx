@@ -78,6 +78,8 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   const [isQrisEnlarged, setIsQrisEnlarged] = useState<boolean>(false);
   const [confirmRemoveQris, setConfirmRemoveQris] = useState<boolean>(false);
   const [resolvedQrisUrl, setResolvedQrisUrl] = useState<string>(store.qrisImageUrl || '');
+  const [qrisUploadError, setQrisUploadError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const qrisFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -100,6 +102,8 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
       setShouldAutoPrint(printerConfig.autoPrintOnPayment);
       setIsQrisEnlarged(false);
       setConfirmRemoveQris(false);
+      setQrisUploadError(null);
+      setIsSubmitting(false);
     }
   }, [isOpen, total, printerConfig.autoPrintOnPayment, defaultPaymentMethod]);
 
@@ -144,17 +148,28 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
   const handleQrisFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
+    setQrisUploadError(null);
     if (!file) return;
 
-    void optimizeQrisImageFile(file).then((base64) => {
-      if (base64 && onUpdateStore) {
-        onUpdateStore((prev) => ({
-          ...prev,
-          qrisImageUrl: base64,
-        }));
-        sounds.playItemBeep();
-      }
-    });
+    void optimizeQrisImageFile(file)
+      .then((base64) => {
+        if (base64 && onUpdateStore) {
+          onUpdateStore((prev) => ({
+            ...prev,
+            qrisImageUrl: base64,
+          }));
+          sounds.playItemBeep();
+        }
+      })
+      .catch((err) => {
+        setQrisUploadError(
+          err instanceof Error
+            ? err.message
+            : 'Gagal memproses gambar QRIS. Gunakan format PNG, JPG, atau WebP.'
+        );
+        sounds.playError();
+      });
   };
 
   const handleRemoveQris = () => {
@@ -212,10 +227,12 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   };
 
   const handleFinish = () => {
-    if (isCashInsufficient) {
-      sounds.playError();
+    if (isSubmitting || isCashInsufficient) {
+      if (isCashInsufficient) sounds.playError();
       return;
     }
+
+    setIsSubmitting(true);
 
     // Play pleasant cash register sound
     sounds.playCashRegister();
@@ -471,10 +488,15 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
               <input
                 type="file"
                 ref={qrisFileInputRef}
-                accept="image/*"
+                accept="image/png,image/jpeg,image/webp"
                 onChange={handleQrisFileUpload}
                 className="hidden"
               />
+              {qrisUploadError && (
+                <div className="w-full p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
+                  {qrisUploadError}
+                </div>
+              )}
 
               {resolvedQrisUrl ? (
                 /* Display Unified Store QRIS (Uploaded or Store Default) */
@@ -638,15 +660,15 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
           <button
             type="button"
             onClick={handleFinish}
-            disabled={isCashInsufficient}
+            disabled={isCashInsufficient || isSubmitting}
             className={`flex-1 flex items-center justify-center gap-2 py-3 px-6 rounded-xl font-bold text-sm text-white shadow-md transition-all ${
-              isCashInsufficient
+              isCashInsufficient || isSubmitting
                 ? 'bg-slate-300 cursor-not-allowed text-slate-500 shadow-none'
                 : 'bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98]'
             }`}
           >
             <CheckCircle2 className="w-5 h-5" />
-            <span>Selesaikan & Proses Struk</span>
+            <span>{isSubmitting ? 'Memproses...' : 'Selesaikan & Proses Struk'}</span>
           </button>
         </div>
       </div>

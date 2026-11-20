@@ -14,7 +14,6 @@ import {
   Minus,
   Percent,
   Plus,
-  QrCode,
   Receipt,
   Search,
   ShoppingBag,
@@ -41,9 +40,6 @@ interface CashierPOSViewProps {
   setGlobalDiscountPercent: (discPercent: number) => void;
   lowStockThreshold?: number;
   onOpenPaymentModal: () => void;
-  pendingOnlineOrdersCount?: number;
-  onNavigateToOnlineOrders?: () => void;
-  onNavigateToTableQR?: () => void;
 }
 
 export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
@@ -61,9 +57,6 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
   setGlobalDiscountPercent,
   lowStockThreshold = 10,
   onOpenPaymentModal,
-  pendingOnlineOrdersCount = 0,
-  onNavigateToOnlineOrders,
-  onNavigateToTableQR,
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<string>('Semua');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -73,6 +66,7 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
     index: number;
     currentNote: string;
   } | null>(null);
+  const [noteDraft, setNoteDraft] = useState<string>('');
   const [discountModalOpen, setDiscountModalOpen] = useState<boolean>(false);
   const [customDiscountPercent, setCustomDiscountPercent] = useState<string>('');
 
@@ -95,11 +89,24 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
   }, [products, selectedCategory, searchQuery]);
 
   // Cart operations
+  const showStockToast = (message: string) => {
+    sounds.playError();
+    setStockAlertToast(message);
+    window.setTimeout(() => setStockAlertToast(null), 3500);
+  };
+
   const handleAddToCart = (product: Product) => {
     if (product.stock <= 0) {
-      sounds.playError();
-      setStockAlertToast(`Stok untuk "${product.name}" sedang habis (0 pcs).`);
-      setTimeout(() => setStockAlertToast(null), 3500);
+      showStockToast(`Stok untuk "${product.name}" sedang habis (0 pcs).`);
+      return;
+    }
+
+    const existingItem = cart.find((item) => item.product.id === product.id);
+    const currentQty = existingItem ? existingItem.quantity : 0;
+    if (currentQty >= product.stock) {
+      showStockToast(
+        `Maksimal stok tersedia untuk "${product.name}" adalah ${product.stock} pcs.`
+      );
       return;
     }
 
@@ -116,11 +123,22 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
   };
 
   const handleUpdateQuantity = (index: number, delta: number) => {
+    const target = cart[index];
+    if (!target) return;
+
+    const latestProduct = products.find((p) => p.id === target.product.id);
+    const availableStock = latestProduct ? latestProduct.stock : target.product.stock;
+    const newQty = target.quantity + delta;
+
+    if (delta > 0 && newQty > availableStock) {
+      showStockToast(
+        `Jumlah "${target.product.name}" tidak boleh melebihi stok (${availableStock} pcs).`
+      );
+      return;
+    }
+
     sounds.playItemBeep();
     setCart((prev) => {
-      const target = prev[index];
-      if (!target) return prev;
-      const newQty = target.quantity + delta;
       if (newQty <= 0) {
         return prev.filter((_, idx) => idx !== index);
       }
@@ -128,13 +146,30 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
     });
   };
 
+  const handleProceedToCheckout = () => {
+    for (const item of cart) {
+      const latestProd = products.find((p) => p.id === item.product.id);
+      const avail = latestProd ? latestProd.stock : item.product.stock;
+      if (item.quantity > avail) {
+        showStockToast(
+          `Stok "${item.product.name}" hanya tersisa ${avail} pcs. Kurangi jumlah sebelum bayar.`
+        );
+        return;
+      }
+    }
+    onOpenPaymentModal();
+  };
+
   const handleSaveItemNote = (noteText: string) => {
     if (activeItemNoteModal !== null) {
       const targetIdx = activeItemNoteModal.index;
       setCart((prev) =>
-        prev.map((item, idx) => (idx === targetIdx ? { ...item, note: noteText.trim() } : item))
+        prev.map((item, idx) =>
+          idx === targetIdx ? { ...item, note: noteText.trim().slice(0, 300) } : item
+        )
       );
       setActiveItemNoteModal(null);
+      setNoteDraft('');
     }
   };
 
@@ -186,35 +221,9 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
         </div>
       )}
 
-      {/* Alert Banner for Incoming Online Orders */}
-      {pendingOnlineOrdersCount > 0 && onNavigateToOnlineOrders && (
-        <div className="mb-4 p-3.5 bg-gradient-to-r from-amber-500 via-rose-500 to-rose-600 text-white rounded-2xl shadow-xl flex items-center justify-between animate-in fade-in slide-in-from-top-2">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center font-bold text-white shrink-0 border border-white/20">
-              <ShoppingBag className="w-5 h-5 animate-bounce" />
-            </div>
-            <div>
-              <div className="text-xs sm:text-sm font-extrabold flex items-center gap-2">
-                <span>Ada {pendingOnlineOrdersCount} Pesanan Online Baru Masuk!</span>
-                <span className="bg-white text-rose-600 text-[10px] font-black px-2 py-0.5 rounded-full uppercase shadow-xs">
-                  Perlu Konfirmasi
-                </span>
-              </div>
-              <p className="text-[11px] text-white/90">Pelanggan memesan via scan barcode meja / online.</p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onNavigateToOnlineOrders}
-            className="px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-900 font-extrabold text-xs rounded-xl shadow-md transition-all active:scale-95 cursor-pointer shrink-0"
-          >
-            Buka Pesanan Online &rarr;
-          </button>
-        </div>
-      )}
-
+      {/* Product Catalog & Cart Grid */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-4 lg:gap-6 items-start">
-        {/* Left: Product Catalog (7 or 8 columns on tablet/desktop) */}
+        {/* Left: Product Catalog */}
         <div className={`${isFullCatalogOnTablet ? 'col-span-12' : 'col-span-1 md:col-span-7 xl:col-span-8'} space-y-4`}>
           {/* Search & Category Pills */}
           <div className="bg-white rounded-2xl p-3.5 sm:p-4 border border-slate-200 shadow-xs space-y-3">
@@ -224,8 +233,9 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
                 <input
                   type="text"
                   value={searchQuery}
+                  maxLength={100}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Cari menu, kopi, makanan, atau SKU..."
+                  placeholder="Cari nama menu atau kode produk..."
                   className="w-full pl-10 pr-8 py-2.5 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
                 />
                 {searchQuery && (
@@ -237,41 +247,6 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
                   </button>
                 )}
               </div>
-
-              {/* Online Orders Quick Button in Search Toolbar */}
-              {onNavigateToOnlineOrders && (
-                <button
-                  type="button"
-                  onClick={onNavigateToOnlineOrders}
-                  className={`flex items-center gap-1.5 px-3 py-2.5 rounded-xl border text-xs font-bold shrink-0 cursor-pointer transition-all active:scale-95 ${
-                    pendingOnlineOrdersCount > 0
-                      ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-300 ring-2 ring-rose-500/20'
-                      : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700'
-                  }`}
-                  title="Daftar Pesanan Online Masuk"
-                >
-                  <ShoppingBag className={`w-4 h-4 ${pendingOnlineOrdersCount > 0 ? 'text-rose-600' : 'text-emerald-700'}`} />
-                  <span className="hidden sm:inline">Pesanan Online</span>
-                  {pendingOnlineOrdersCount > 0 && (
-                    <span className="px-1.5 py-0.2 bg-rose-500 text-white rounded-full text-[10px] font-black animate-pulse">
-                      {pendingOnlineOrdersCount}
-                    </span>
-                  )}
-                </button>
-              )}
-
-              {/* Table QR Quick Button */}
-              {onNavigateToTableQR && (
-                <button
-                  type="button"
-                  onClick={onNavigateToTableQR}
-                  className="hidden lg:flex items-center gap-1.5 px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold shrink-0 cursor-pointer transition-all active:scale-95"
-                  title="Lihat & Cetak Barcode Meja"
-                >
-                  <QrCode className="w-4 h-4 text-emerald-700" />
-                  <span>QR Meja</span>
-                </button>
-              )}
 
               {/* Tablet view mode toggle */}
               <button
@@ -471,7 +446,7 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                🍽️ Makan di Sini
+                🍽️ Makan di Tempat
               </button>
               <button
                 type="button"
@@ -493,18 +468,20 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
                 <input
                   type="text"
                   value={customerName}
+                  maxLength={120}
                   onChange={(e) => setCustomerName(e.target.value)}
-                  placeholder="Nama Pelanggan"
+                  placeholder="Nama (opsional)"
                   className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                 />
               </div>
               <div>
                 <label className="text-[10px] uppercase font-bold text-slate-500 mb-1 block">
-                  {orderType === 'dine_in' ? 'Nomor Meja' : 'No. Antrian'}
+                  {orderType === 'dine_in' ? 'No. Meja' : 'No. Antrian'}
                 </label>
                 <input
                   type="text"
                   value={tableNumber}
+                  maxLength={40}
                   onChange={(e) => setTableNumber(e.target.value)}
                   placeholder={orderType === 'dine_in' ? 'Contoh: 05' : 'Contoh: A-12'}
                   className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500"
@@ -519,7 +496,7 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
               <div className="py-12 text-center text-slate-400 space-y-2">
                 <ShoppingBag className="w-10 h-10 mx-auto text-slate-300" />
                 <p className="text-xs font-semibold text-slate-600">Keranjang masih kosong</p>
-                <p className="text-[11px] text-slate-400">Pilih menu di samping untuk mulai transaksi kasir.</p>
+                <p className="text-[11px] text-slate-400">Klik menu di sebelah kiri untuk menambahkan pesanan.</p>
               </div>
             ) : (
               cart.map((item, index) => {
@@ -575,12 +552,14 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
 
                     <div className="flex items-center justify-between pt-1">
                       <button
-                        onClick={() =>
+                        type="button"
+                        onClick={() => {
+                          setNoteDraft(item.note || '');
                           setActiveItemNoteModal({
                             index,
                             currentNote: item.note || '',
-                          })
-                        }
+                          });
+                        }}
                         className="text-[10px] text-slate-500 hover:text-emerald-700 flex items-center gap-1"
                       >
                         <Edit3 className="w-2.5 h-2.5" />
@@ -663,7 +642,7 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
 
               <button
                 type="button"
-                onClick={onOpenPaymentModal}
+                onClick={handleProceedToCheckout}
                 disabled={cart.length === 0}
                 className={`py-3 px-5 rounded-xl font-bold text-sm text-white shadow-md flex items-center gap-2 transition-all active:scale-[0.98] ${
                   cart.length === 0
@@ -672,7 +651,7 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
                 }`}
               >
                 <CreditCard className="w-4 h-4" />
-                <span>Bayar (F9)</span>
+                <span>Bayar Sekarang</span>
               </button>
             </div>
           </div>
@@ -694,8 +673,9 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
             </p>
             <input
               type="text"
-              defaultValue={activeItemNoteModal.currentNote}
-              id="itemNoteInput"
+              value={noteDraft}
+              maxLength={300}
+              onChange={(e) => setNoteDraft(e.target.value)}
               autoFocus
               className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
               placeholder="Ketik catatan..."
@@ -703,17 +683,17 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => setActiveItemNoteModal(null)}
+                onClick={() => {
+                  setActiveItemNoteModal(null);
+                  setNoteDraft('');
+                }}
                 className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg"
               >
                 Batal
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  const input = document.getElementById('itemNoteInput') as HTMLInputElement;
-                  handleSaveItemNote(input ? input.value : '');
-                }}
+                onClick={() => handleSaveItemNote(noteDraft)}
                 className="px-4 py-1.5 text-xs font-bold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
               >
                 Simpan
@@ -915,7 +895,7 @@ export const CashierPOSView: React.FC<CashierPOSViewProps> = ({
             )}
             <button
               type="button"
-              onClick={onOpenPaymentModal}
+              onClick={handleProceedToCheckout}
               className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-emerald-950 font-black text-xs sm:text-sm flex items-center gap-1.5 shadow-lg active:scale-95 transition-all cursor-pointer"
             >
               <CreditCard className="w-4 h-4" />

@@ -27,7 +27,8 @@ import { PrinterConfig, StoreProfile } from '../types/pos';
 import { BluetoothPrinterState } from '../utils/bluetoothThermalPrinter';
 import { getLocalDateString } from '../utils/formatters';
 import { PRESET_LOGOS } from '../utils/presetLogos';
-import { getStoreQrisImageDataUrl, optimizeQrisImageFile } from '../utils/qrCodeGenerator';
+import { getStoreQrisImageDataUrl, optimizeLogoImageFile, optimizeQrisImageFile } from '../utils/qrCodeGenerator';
+import { safeJsonParse } from '../utils/sanitize';
 import { sounds } from '../utils/soundEffects';
 
 interface SettingsViewProps {
@@ -40,12 +41,11 @@ interface SettingsViewProps {
   onResetData: () => void;
   fullDataPayload: {
     store: StoreProfile;
-    products: any[];
-    orders: any[];
+    products: unknown[];
+    orders: unknown[];
     printerConfig: PrinterConfig;
-    users?: any[];
   };
-  onImportData: (data: any) => void;
+  onImportData: (data: Record<string, unknown>) => void;
   onOpenLogoManager?: () => void;
   onQuickConnectBluetooth?: () => void;
 }
@@ -87,7 +87,40 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setStore(formData);
+    const trimmedStoreName = formData.storeName.trim().slice(0, 120);
+    if (!trimmedStoreName) {
+      sounds.playError();
+      setBackupFeedback({
+        type: 'error',
+        message: 'Nama toko / usaha tidak boleh kosong.',
+      });
+      return;
+    }
+
+    const sanitizedSubmit: StoreProfile = {
+      ...formData,
+      storeName: trimmedStoreName,
+      tagline: formData.tagline.trim().slice(0, 200),
+      address: formData.address.trim().slice(0, 300),
+      phone: formData.phone.trim().slice(0, 40),
+      wifiName: formData.wifiName?.trim().slice(0, 80) || undefined,
+      wifiPassword: formData.wifiPassword?.trim().slice(0, 80) || undefined,
+      footerNote: formData.footerNote.slice(0, 500),
+      qrisMerchantName: formData.qrisMerchantName?.trim().slice(0, 120) || undefined,
+      qrisNmid: formData.qrisNmid?.trim().slice(0, 80) || undefined,
+      taxPercentage: Number.isFinite(formData.taxPercentage)
+        ? Math.min(100, Math.max(0, formData.taxPercentage))
+        : 0,
+      serviceChargePercentage: Number.isFinite(formData.serviceChargePercentage)
+        ? Math.min(100, Math.max(0, formData.serviceChargePercentage))
+        : 0,
+      lowStockThreshold: Number.isFinite(formData.lowStockThreshold)
+        ? Math.min(500, Math.max(1, Math.round(formData.lowStockThreshold || 10)))
+        : 10,
+    };
+
+    setFormData(sanitizedSubmit);
+    setStore(sanitizedSubmit);
     setSavedSuccess(true);
     sounds.playItemBeep();
     setTimeout(() => setSavedSuccess(false), 3000);
@@ -110,33 +143,50 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const handleImportBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
+
+    if (file.size > 10 * 1024 * 1024) {
+      sounds.playError();
+      setBackupFeedback({
+        type: 'error',
+        message: 'Ukuran file backup terlalu besar (maksimal 10MB).',
+      });
+      return;
+    }
 
     const reader = new FileReader();
     reader.onload = (event) => {
-      try {
-        const parsed = JSON.parse(event.target?.result as string);
-        if (parsed && parsed.products && parsed.store) {
-          onImportData(parsed);
-          sounds.playCashRegister();
-          setBackupFeedback({
-            type: 'success',
-            message: 'Data berhasil dipulihkan secara lengkap dari backup!',
-          });
-        } else {
-          sounds.playError();
-          setBackupFeedback({
-            type: 'error',
-            message: 'Format file backup tidak valid. Gunakan file JSON cadangan dari aplikasi Kasir.',
-          });
-        }
-      } catch (err) {
+      const raw = typeof event.target?.result === 'string' ? event.target.result : '';
+      const parsed = safeJsonParse<Record<string, unknown>>(raw);
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        Array.isArray(parsed.products) &&
+        parsed.store &&
+        typeof parsed.store === 'object'
+      ) {
+        onImportData(parsed);
+        sounds.playCashRegister();
+        setBackupFeedback({
+          type: 'success',
+          message: 'Data berhasil dipulihkan secara lengkap dan tervalidasi dari backup!',
+        });
+      } else {
         sounds.playError();
         setBackupFeedback({
           type: 'error',
-          message: 'Gagal membaca file JSON. Pastikan file tidak rusak.',
+          message:
+            'Format file backup tidak valid. Gunakan file JSON cadangan dari aplikasi Kasir.',
         });
       }
+    };
+    reader.onerror = () => {
+      sounds.playError();
+      setBackupFeedback({
+        type: 'error',
+        message: 'Gagal membaca file JSON. Pastikan file tidak rusak.',
+      });
     };
     reader.readAsText(file);
   };
@@ -272,6 +322,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <input
                 type="text"
                 required
+                maxLength={120}
                 value={formData.storeName}
                 onChange={(e) => setFormData({ ...formData, storeName: e.target.value })}
                 className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
@@ -282,6 +333,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <label className="block text-xs font-semibold text-slate-700 mb-1">Slogan / Tagline Usaha</label>
               <input
                 type="text"
+                maxLength={200}
                 value={formData.tagline}
                 onChange={(e) => setFormData({ ...formData, tagline: e.target.value })}
                 placeholder="Contoh: Kopi Pilihan & Santapan Nusantara"
@@ -295,6 +347,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <label className="block text-xs font-semibold text-slate-700 mb-1">Alamat Lengkap</label>
               <input
                 type="text"
+                maxLength={300}
                 value={formData.address}
                 onChange={(e) => setFormData({ ...formData, address: e.target.value })}
                 placeholder="Jl. Malioboro No. 45, Yogyakarta"
@@ -306,6 +359,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <label className="block text-xs font-semibold text-slate-700 mb-1">Nomor Telepon / WhatsApp</label>
               <input
                 type="text"
+                maxLength={40}
                 value={formData.phone}
                 onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                 placeholder="0812-3456-7890"
@@ -319,6 +373,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <label className="block text-xs font-semibold text-slate-700 mb-1">Nama WiFi Toko (SSID)</label>
               <input
                 type="text"
+                maxLength={80}
                 value={formData.wifiName || ''}
                 onChange={(e) => setFormData({ ...formData, wifiName: e.target.value })}
                 placeholder="KopiNusantara_Guest"
@@ -330,9 +385,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <label className="block text-xs font-semibold text-slate-700 mb-1">Password WiFi</label>
               <input
                 type="text"
+                maxLength={80}
                 value={formData.wifiPassword || ''}
                 onChange={(e) => setFormData({ ...formData, wifiPassword: e.target.value })}
-                placeholder="kopienakbanget"
+                placeholder="Opsional untuk struk"
                 className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
@@ -344,6 +400,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </label>
             <textarea
               rows={3}
+              maxLength={500}
               value={formData.footerNote}
               onChange={(e) => setFormData({ ...formData, footerNote: e.target.value })}
               placeholder="Terima kasih atas kunjungannya! Follow IG kami @tokokopi"
@@ -477,23 +534,33 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <span>{formData.logoUrl ? 'Ganti File Logo Sendiri' : 'Unggah File Logo Baru'}</span>
                     <input
                       type="file"
-                      accept="image/*"
+                      accept="image/png,image/jpeg,image/webp"
                       className="hidden"
                       onChange={(e) => {
                         const file = e.target.files?.[0];
+                        e.target.value = '';
                         if (file) {
-                          const reader = new FileReader();
-                          reader.onload = (ev) => {
-                            setFormData({ ...formData, logoUrl: ev.target?.result as string });
-                            sounds.playCashRegister();
-                          };
-                          reader.readAsDataURL(file);
+                          void optimizeLogoImageFile(file)
+                            .then((logoDataUrl) => {
+                              setFormData((prev) => ({ ...prev, logoUrl: logoDataUrl }));
+                              sounds.playCashRegister();
+                            })
+                            .catch((err) => {
+                              sounds.playError();
+                              setBackupFeedback({
+                                type: 'error',
+                                message:
+                                  err instanceof Error
+                                    ? err.message
+                                    : 'Gagal memproses logo. Gunakan format PNG, JPG, atau WebP.',
+                              });
+                            });
                         }
                       }}
                     />
                   </label>
                   <p className="text-[10px] text-slate-400 mt-1">
-                    Format file: PNG, JPG, SVG, WebP (Rekomendasi rasio 1:1 / persegi)
+                    Format file: PNG, JPG, WebP maks. 3MB (atau pilih 8 Preset Vektor di atas)
                   </p>
                 </div>
               </div>
@@ -555,18 +622,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         Ganti Gambar QRIS
                         <input
                           type="file"
-                          accept="image/*"
+                          accept="image/png,image/jpeg,image/webp"
                           className="hidden"
                           onChange={(e) => {
                             const file = e.target.files?.[0];
+                            e.target.value = '';
                             if (file) {
-                              void optimizeQrisImageFile(file).then((imgUrl) => {
-                                setFormData((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
-                                setStore((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
-                                setQrisSyncNote('QRIS baru owner tersimpan & disinkronkan ke Kasir dan Portal Online.');
-                                setTimeout(() => setQrisSyncNote(null), 5000);
-                                sounds.playItemBeep();
-                              });
+                              void optimizeQrisImageFile(file)
+                                .then((imgUrl) => {
+                                  setFormData((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
+                                  setStore((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
+                                  setQrisSyncNote('QRIS baru berhasil disimpan untuk transaksi kasir.');
+                                  setTimeout(() => setQrisSyncNote(null), 5000);
+                                  sounds.playItemBeep();
+                                })
+                                .catch(() => {
+                                  sounds.playError();
+                                  setQrisSyncNote('Gagal memproses file gambar QRIS. Gunakan format PNG/JPG/WebP yang valid.');
+                                  setTimeout(() => setQrisSyncNote(null), 5000);
+                                });
                             }
                           }}
                         />
@@ -589,18 +663,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         <span>Unggah Foto QRIS Toko</span>
                         <input
                           type="file"
-                          accept="image/*"
+                          accept="image/png,image/jpeg,image/webp"
                           className="hidden"
                           onChange={(e) => {
                             const file = e.target.files?.[0];
+                            e.target.value = '';
                             if (file) {
-                              void optimizeQrisImageFile(file).then((imgUrl) => {
-                                setFormData((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
-                                setStore((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
-                                setQrisSyncNote('QRIS owner berhasil diunggah & disinkronkan ke Kasir dan Portal Online.');
-                                setTimeout(() => setQrisSyncNote(null), 5000);
-                                sounds.playItemBeep();
-                              });
+                              void optimizeQrisImageFile(file)
+                                .then((imgUrl) => {
+                                  setFormData((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
+                                  setStore((prev) => ({ ...prev, qrisImageUrl: imgUrl }));
+                                  setQrisSyncNote('QRIS berhasil diunggah untuk pembayaran kasir.');
+                                  setTimeout(() => setQrisSyncNote(null), 5000);
+                                  sounds.playItemBeep();
+                                })
+                                .catch(() => {
+                                  sounds.playError();
+                                  setQrisSyncNote('Gagal memproses file gambar QRIS. Gunakan format PNG/JPG/WebP yang valid.');
+                                  setTimeout(() => setQrisSyncNote(null), 5000);
+                                });
                             }
                           }}
                         />
@@ -638,7 +719,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
 
                   <p className="text-[11px] text-teal-800 bg-teal-100/60 p-2.5 rounded-xl">
-                    💡 Barcode QRIS Toko ini otomatis dipakai secara identik baik di layar Kasir maupun di Portal Pemesanan Online pelanggan.
+                    💡 Barcode QRIS Toko ini otomatis ditampilkan di layar kasir saat pelanggan membayar menggunakan QRIS.
                   </p>
                 </div>
               </div>
@@ -662,8 +743,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <span className="text-xs text-slate-500">Persentase (%):</span>
                   <input
                     type="number"
+                    min={0}
+                    max={100}
+                    step="any"
                     value={formData.taxPercentage}
-                    onChange={(e) => setFormData({ ...formData, taxPercentage: Number(e.target.value) })}
+                    onChange={(e) => {
+                      const num = Number(e.target.value);
+                      setFormData({
+                        ...formData,
+                        taxPercentage: Number.isFinite(num)
+                          ? Math.min(100, Math.max(0, num))
+                          : 0,
+                      });
+                    }}
                     className="w-20 px-2 py-1 border border-slate-300 rounded-lg text-xs font-bold text-slate-800"
                   />
                 </div>
@@ -685,10 +777,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <span className="text-xs text-slate-500">Persentase (%):</span>
                   <input
                     type="number"
+                    min={0}
+                    max={100}
+                    step="any"
                     value={formData.serviceChargePercentage}
-                    onChange={(e) =>
-                      setFormData({ ...formData, serviceChargePercentage: Number(e.target.value) })
-                    }
+                    onChange={(e) => {
+                      const num = Number(e.target.value);
+                      setFormData({
+                        ...formData,
+                        serviceChargePercentage: Number.isFinite(num)
+                          ? Math.min(100, Math.max(0, num))
+                          : 0,
+                      });
+                    }}
                     className="w-20 px-2 py-1 border border-slate-300 rounded-lg text-xs font-bold text-slate-800"
                   />
                 </div>
@@ -719,12 +820,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   min={1}
                   max={500}
                   value={formData.lowStockThreshold ?? 10}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    const num = Number(e.target.value);
                     setFormData({
                       ...formData,
-                      lowStockThreshold: Math.max(1, Number(e.target.value)),
-                    })
-                  }
+                      lowStockThreshold: Number.isFinite(num)
+                        ? Math.min(500, Math.max(1, Math.round(num)))
+                        : 10,
+                    });
+                  }}
                   className="w-20 px-2.5 py-1.5 border border-amber-300 bg-white rounded-xl text-xs font-bold text-slate-900 text-center focus:outline-none focus:ring-2 focus:ring-amber-500"
                 />
                 <span className="text-xs font-semibold text-slate-600">pcs</span>

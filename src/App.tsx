@@ -3,15 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, LogOut, Menu, QrCode, ShoppingBag } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, LogOut, X } from 'lucide-react';
 import { CashierPOSView } from './components/CashierPOSView';
-import { CustomerOrderPortal } from './components/CustomerOrderPortal';
 import { DailyReportsView } from './components/DailyReportsView';
 import { LoginPage } from './components/LoginPage';
 import { LogoManagementView } from './components/LogoManagementView';
 import { Navbar } from './components/Navbar';
-import { OnlineOrdersView } from './components/OnlineOrdersView';
 import { PaymentModal } from './components/PaymentModal';
 import { PrinterSettingsModal } from './components/PrinterSettingsModal';
 import { ProductManagementView } from './components/ProductManagementView';
@@ -19,7 +17,6 @@ import { ReceiptModal } from './components/ReceiptModal';
 import { ReportReceiptModal } from './components/ReportReceiptModal';
 import { SettingsView } from './components/SettingsView';
 import { Sidebar } from './components/Sidebar';
-import { TableQRView } from './components/TableQRView';
 import { TransactionHistoryView } from './components/TransactionHistoryView';
 import { UserManagementView } from './components/UserManagementView';
 import {
@@ -27,7 +24,6 @@ import {
   AppUser,
   CartItem,
   DailySalesReport,
-  OnlineOrder,
   Order,
   PaymentMethod,
   PrinterConfig,
@@ -38,94 +34,118 @@ import {
   bluetoothPrinter,
   BluetoothPrinterState,
 } from './utils/bluetoothThermalPrinter';
-import { onlineOrdersManager, PaidPosEvent } from './utils/onlineOrdersManager';
 import {
   DEFAULT_PRINTER_CONFIG,
   DEFAULT_STORE_PROFILE,
-  DEFAULT_USERS,
   INITIAL_PRODUCTS,
   getInitialOrders,
 } from './utils/initialData';
-import { formatRupiah, getLocalDateString } from './utils/formatters';
+import { getLocalDateString } from './utils/formatters';
+import {
+  safeJsonParse,
+  sanitizeOrderList,
+  sanitizePrinterConfig,
+  sanitizeProductList,
+  sanitizeStoreProfile,
+} from './utils/sanitize';
 import { sounds } from './utils/soundEffects';
+import { useFirebase } from './contexts/FirebaseContext';
+import {
+  decrementProductsStockInFirestore,
+  isBootstrapAdminUser,
+  savePosOrderToFirestore,
+  seedInitialStoreAndProductsIfEmpty,
+  subscribeCurrentUserProfile,
+  subscribeManagedUsers,
+  subscribePosOrders,
+  subscribeProducts,
+  subscribeStoreProfile,
+  syncFirebaseUserProfile,
+  syncProductsBatchToFirestore,
+  updatePosOrderStatusInFirestore,
+  upsertStoreInFirestore,
+} from './lib/firestoreSync';
 
 const STORAGE_KEY_STORE = 'kasirku_store_v1';
 const STORAGE_KEY_PRODUCTS = 'kasirku_products_v1';
 const STORAGE_KEY_ORDERS = 'kasirku_orders_v1';
 const STORAGE_KEY_PRINTER = 'kasirku_printer_v1';
-const STORAGE_KEY_USERS = 'kasirku_users_v1';
-const STORAGE_KEY_AUTH = 'kasirku_auth_user_v1';
 
 export default function App() {
+  const { firebaseUser, authReady, signOutFirebase } = useFirebase();
+
   // Navigation
   const [activeTab, setActiveTab] = useState<ActiveTab>('pos');
 
-  // Authentication State
-  const [users, setUsers] = useState<AppUser[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_USERS);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          // Ensure master email/password exists
-          const hasMaster = parsed.some((u) => u.email === 'kopiliterasi12@gmail.com');
-          if (hasMaster) return parsed;
-        }
-      }
-      return DEFAULT_USERS;
-    } catch {
-      return DEFAULT_USERS;
-    }
-  });
+  // Verified Authentication State (derived strictly from Firebase Auth + Firestore)
+  const [users, setUsers] = useState<AppUser[]>([]);
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
+  const [isResolvingProfile, setIsResolvingProfile] = useState<boolean>(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [syncWarning, setSyncWarning] = useState<string | null>(null);
 
-  const [currentUser, setCurrentUser] = useState<AppUser | null>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_AUTH);
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
-
-  // Persistent States
+  // Sanitized Persistent States
   const [store, setStore] = useState<StoreProfile>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_STORE);
-      return saved ? JSON.parse(saved) : DEFAULT_STORE_PROFILE;
+      if (saved) {
+        const parsed = safeJsonParse<unknown>(saved);
+        if (parsed) return sanitizeStoreProfile(parsed, DEFAULT_STORE_PROFILE);
+      }
     } catch {
-      return DEFAULT_STORE_PROFILE;
+      // ignore storage access issues
     }
+    return DEFAULT_STORE_PROFILE;
   });
 
   const [products, setProducts] = useState<Product[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_PRODUCTS);
-      return saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
+      if (saved) {
+        const parsed = safeJsonParse<unknown>(saved);
+        if (parsed) return sanitizeProductList(parsed, INITIAL_PRODUCTS);
+      }
     } catch {
-      return INITIAL_PRODUCTS;
+      // ignore
     }
+    return INITIAL_PRODUCTS;
   });
 
   const [orders, setOrders] = useState<Order[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_ORDERS);
-      return saved ? JSON.parse(saved) : getInitialOrders();
+      if (saved) {
+        const parsed = safeJsonParse<unknown>(saved);
+        if (parsed) return sanitizeOrderList(parsed, getInitialOrders());
+      }
     } catch {
-      return getInitialOrders();
+      // ignore
     }
+    return getInitialOrders();
   });
 
   const [printerConfig, setPrinterConfig] = useState<PrinterConfig>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_PRINTER);
-      return saved ? JSON.parse(saved) : DEFAULT_PRINTER_CONFIG;
+      if (saved) {
+        const parsed = safeJsonParse<unknown>(saved);
+        if (parsed) return sanitizePrinterConfig(parsed, DEFAULT_PRINTER_CONFIG);
+      }
     } catch {
-      return DEFAULT_PRINTER_CONFIG;
+      // ignore
     }
+    return DEFAULT_PRINTER_CONFIG;
   });
 
+  const latestStoreRef = useRef<StoreProfile>(store);
+  latestStoreRef.current = store;
+  const latestProductsRef = useRef<Product[]>(products);
+  latestProductsRef.current = products;
+
   // Bluetooth Manager State
-  const [printerState, setPrinterState] = useState<BluetoothPrinterState>(bluetoothPrinter.getState());
+  const [printerState, setPrinterState] = useState<BluetoothPrinterState>(
+    bluetoothPrinter.getState()
+  );
 
   useEffect(() => {
     const unsubscribe = bluetoothPrinter.subscribe((state) => {
@@ -134,63 +154,53 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Save to LocalStorage safely (guard against quota exceeded errors on large images)
+  // Save to LocalStorage safely
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY_STORE, JSON.stringify(store));
-    } catch (err) {
-      console.warn('Gagal menyimpan store ke localStorage:', err);
+    } catch {
+      // ignore quota errors
     }
   }, [store]);
 
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY_PRODUCTS, JSON.stringify(products));
-    } catch (err) {
-      console.warn('Gagal menyimpan products ke localStorage:', err);
+    } catch {
+      // ignore quota errors
     }
   }, [products]);
 
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY_ORDERS, JSON.stringify(orders));
-    } catch (err) {
-      console.warn('Gagal menyimpan orders ke localStorage:', err);
+    } catch {
+      // ignore quota errors
     }
   }, [orders]);
 
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY_PRINTER, JSON.stringify(printerConfig));
-    } catch (err) {
-      console.warn('Gagal menyimpan printerConfig ke localStorage:', err);
+    } catch {
+      // ignore quota errors
     }
   }, [printerConfig]);
 
+  // Remove legacy insecure local auth keys if present from older versions
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(users));
-    } catch (err) {
-      console.warn('Gagal menyimpan users ke localStorage:', err);
-    }
-  }, [users]);
-
-  useEffect(() => {
-    try {
-      if (currentUser) {
-        localStorage.setItem(STORAGE_KEY_AUTH, JSON.stringify(currentUser));
-      } else {
-        localStorage.removeItem(STORAGE_KEY_AUTH);
-      }
+      localStorage.removeItem('kasirku_users_v1');
+      localStorage.removeItem('kasirku_auth_user_v1');
     } catch {
       // ignore
     }
-  }, [currentUser]);
+  }, []);
 
   // Ensure cashiers cannot access restricted management tabs
   useEffect(() => {
     if (currentUser && currentUser.role === 'cashier') {
-      if (!['pos', 'history', 'online_orders', 'table_qr'].includes(activeTab)) {
+      if (!['pos', 'history'].includes(activeTab)) {
         setActiveTab('pos');
       }
     }
@@ -223,7 +233,7 @@ export default function App() {
     return typeof window !== 'undefined' ? window.innerWidth >= 768 : true;
   });
 
-    const handleToggleSidebar = () => {
+  const handleToggleSidebar = () => {
     setIsSidebarOpen((prev) => {
       const next = !prev;
       try {
@@ -235,279 +245,234 @@ export default function App() {
     });
   };
 
-  // Customer Portal Mode (e.g. Scan Barcode Meja / URL parameter ?mode=order)
-  const [isCustomerPortalActive, setIsCustomerPortalActive] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      return params.get('mode') === 'order' || params.get('order') === 'true';
+  const [firestoreOwnerUid, setFirestoreOwnerUid] = useState<string | null>(null);
+  const [firestoreStaffUids, setFirestoreStaffUids] = useState<string[]>([]);
+  const [isFirestoreReady, setIsFirestoreReady] = useState<boolean>(false);
+  const skipNextFirestoreStorePushRef = useRef<boolean>(false);
+  const skipNextFirestoreProductsPushRef = useRef<boolean>(false);
+  const isCompletingOrderRef = useRef<boolean>(false);
+
+  // Hydrate Firebase Auth user & attach Firestore real-time listeners when authenticated
+  useEffect(() => {
+    if (!authReady) return;
+
+    if (!firebaseUser) {
+      setCurrentUser(null);
+      setUsers([]);
+      setFirestoreStaffUids([]);
+      setFirestoreOwnerUid(null);
+      setIsFirestoreReady(false);
+      setIsResolvingProfile(false);
+      return;
     }
-    return false;
-  });
 
-  const [customerPortalTable, setCustomerPortalTable] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      return params.get('table') || '';
-    }
-    return '';
-  });
-
-  useEffect(() => {
-    const handlePopState = () => {
-      if (typeof window === 'undefined') return;
-      const params = new URLSearchParams(window.location.search);
-      const isOrder = params.get('mode') === 'order' || params.get('order') === 'true';
-      setIsCustomerPortalActive(isOrder);
-      setCustomerPortalTable(params.get('table') || '');
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
-
-  // Online Orders State with Server SSE/REST + BroadcastChannel Sync
-  const [onlineOrders, setOnlineOrders] = useState<OnlineOrder[]>(() => onlineOrdersManager.getOrders());
-  const [newOrderToast, setNewOrderToast] = useState<OnlineOrder | null>(null);
-  const [qrisPaidToast, setQrisPaidToast] = useState<PaidPosEvent | null>(null);
-  const [activeOnlineOrderId, setActiveOnlineOrderId] = useState<string | null>(null);
-  const [activeOnlinePaymentPref, setActiveOnlinePaymentPref] = useState<'pay_at_cashier' | 'qris_online' | null>(null);
-  const [remoteCatalog, setRemoteCatalog] = useState<{ store: StoreProfile | null; products: Product[] | null } | null>(null);
-  const [isCatalogReady, setIsCatalogReady] = useState<boolean>(false);
-  const lastAppliedCatalogAtRef = useRef<string | null>(null);
-  const skipNextCatalogPushRef = useRef<boolean>(false);
-  const processedPosOrderIdsRef = useRef<Set<string>>(new Set());
-
-  // Keep processed POS order IDs synced with persisted orders so stock is never deducted twice
-  useEffect(() => {
-    for (const o of orders) {
-      processedPosOrderIdsRef.current.add(o.id);
-    }
-  }, [orders]);
-
-  const reconcilePaidPosOrders = useCallback(
-    (posOrders: Order[], latestPaid?: PaidPosEvent) => {
-      if (!Array.isArray(posOrders) || posOrders.length === 0) return;
-
-      const unseen = posOrders.filter((po) => !processedPosOrderIdsRef.current.has(po.id));
-      if (unseen.length === 0) return;
-
-      // Mark synchronously before state updates to guarantee idempotency
-      for (const po of unseen) {
-        processedPosOrderIdsRef.current.add(po.id);
-      }
-
-      // Compute total quantity sold per product ID across unseen QRIS transactions
-      const qtyByProductId = new Map<string, number>();
-      for (const po of unseen) {
-        for (const item of po.items) {
-          qtyByProductId.set(
-            item.product.id,
-            (qtyByProductId.get(item.product.id) || 0) + item.quantity
-          );
-        }
-      }
-
-      setProducts((prev) =>
-        prev.map((p) => {
-          const soldQty = qtyByProductId.get(p.id);
-          if (!soldQty) return p;
-          return { ...p, stock: Math.max(0, p.stock - soldQty) };
-        })
-      );
-
-      setOrders((prev) => {
-        const existingIds = new Set(prev.map((o) => o.id));
-        const trulyNew = unseen.filter((po) => !existingIds.has(po.id));
-        if (trulyNew.length === 0) return prev;
-        return [...trulyNew, ...prev];
-      });
-
-      sounds.playOrderNotification();
-      sounds.playCashRegister();
-
-      if (latestPaid) {
-        setQrisPaidToast(latestPaid);
-        setTimeout(() => {
-          setQrisPaidToast((curr) =>
-            curr?.posOrder.id === latestPaid.posOrder.id ? null : curr
-          );
-        }, 8000);
-      }
-    },
-    []
-  );
-
-  useEffect(() => {
-    if (cart.length === 0 && (activeOnlineOrderId || activeOnlinePaymentPref)) {
-      setActiveOnlineOrderId(null);
-      setActiveOnlinePaymentPref(null);
-    }
-  }, [cart.length, activeOnlineOrderId, activeOnlinePaymentPref]);
-
-  useEffect(() => {
-    const unsubscribe = onlineOrdersManager.subscribe((orders, newOrder) => {
-      setOnlineOrders(orders);
-      if (
-        newOrder &&
-        newOrder.status === 'pending' &&
-        (newOrder.paymentPreference !== 'qris_online' || newOrder.paymentStatus === 'paid')
-      ) {
-        sounds.playOrderNotification();
-        setNewOrderToast(newOrder);
-        setTimeout(() => setNewOrderToast(null), 8000);
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // Reconcile QRIS Portal settled transactions automatically into cashier POS
-  useEffect(() => {
-    if (isCustomerPortalActive) return;
-
-    const unsubscribePaid = onlineOrdersManager.subscribePaidPosOrders((posOrders, latestPaid) => {
-      reconcilePaidPosOrders(posOrders, latestPaid);
-    });
-
-    void onlineOrdersManager.fetchPaidPosOrders().then((posOrders) => {
-      reconcilePaidPosOrders(posOrders);
-    });
-
-    return () => unsubscribePaid();
-  }, [isCustomerPortalActive, reconcilePaidPosOrders]);
-
-  // Hydrate & subscribe to live server catalog (Store Profile + QRIS + Menu) across ALL modes & roles
-  useEffect(() => {
     let active = true;
-    setIsCatalogReady(false);
+    const isBootstrap = isBootstrapAdminUser(firebaseUser);
+    const unsubscribers: Array<() => void> = [];
+    setIsResolvingProfile(true);
+    setAuthError(null);
 
-    const applyIncomingCatalog = (
-      snap: { store?: StoreProfile | null; products?: Product[] | null; updatedAt?: string | null },
-      isInitial: boolean
-    ) => {
-      if (!active || (!snap.store && !snap.products)) return;
+    void syncFirebaseUserProfile(firebaseUser)
+      .then((syncedUser) => {
+        if (!active) return;
+        if (!syncedUser.isActive) {
+          setAuthError(
+            'Akun ini sedang dinonaktifkan oleh Master Toko. Hubungi pemilik toko untuk mengaktifkan kembali.'
+          );
+          setCurrentUser(null);
+          setIsResolvingProfile(false);
+          void signOutFirebase();
+          return;
+        }
 
-      setRemoteCatalog({
-        store: snap.store ?? null,
-        products: snap.products ?? null,
-      });
+        // Strict server-verified profile binding (never trust stale local storage)
+        setCurrentUser(syncedUser);
+        setUsers(isBootstrap ? [] : [syncedUser]);
+        setIsResolvingProfile(false);
 
-      if (snap.updatedAt && snap.updatedAt === lastAppliedCatalogAtRef.current) {
-        return;
-      }
-
-      if (snap.updatedAt) {
-        lastAppliedCatalogAtRef.current = snap.updatedAt;
-      }
-
-      let adoptedNewerMasterSnapshot = false;
-
-      if (!isCustomerPortalActive && snap.store) {
-        let shouldAdoptStore = !isInitial || !currentUser || currentUser.role !== 'master';
-        if (isInitial && currentUser?.role === 'master') {
-          try {
-            const localSaved = localStorage.getItem(STORAGE_KEY_STORE);
-            const localUpdatedAt = Number(localStorage.getItem('kasirku_store_updated_at_v1') || '0');
-            const serverUpdatedAt = snap.updatedAt ? new Date(snap.updatedAt).getTime() : 0;
-            if (!localSaved || serverUpdatedAt > localUpdatedAt) {
-              shouldAdoptStore = true;
-              adoptedNewerMasterSnapshot = true;
+        // Live listener on own /users/{uid} so deactivations & role changes take effect immediately
+        unsubscribers.push(
+          subscribeCurrentUserProfile(firebaseUser.uid, isBootstrap, (liveUser) => {
+            if (!active) return;
+            if (!liveUser || !liveUser.isActive) {
+              setAuthError(
+                'Sesi Anda dihentikan karena akun dinonaktifkan atau dihapus oleh Master Toko.'
+              );
+              setCurrentUser(null);
+              void signOutFirebase();
+              return;
             }
-          } catch {
-            // ignore
-          }
+            setCurrentUser(liveUser);
+            if (!isBootstrap) {
+              setUsers([liveUser]);
+            }
+          })
+        );
+
+        unsubscribers.push(
+          subscribeStoreProfile(firebaseUser.uid, isBootstrap, (remoteStore) => {
+            if (!active) return;
+            if (remoteStore.ownerUid) {
+              setFirestoreOwnerUid(remoteStore.ownerUid);
+            }
+            skipNextFirestoreStorePushRef.current = true;
+            setStore((prev) =>
+              sanitizeStoreProfile(
+                {
+                  ...prev,
+                  ...remoteStore,
+                  logoUrl: remoteStore.logoUrl ?? prev.logoUrl,
+                  qrisImageUrl: remoteStore.qrisImageUrl ?? prev.qrisImageUrl,
+                },
+                DEFAULT_STORE_PROFILE
+              )
+            );
+          })
+        );
+
+        unsubscribers.push(
+          subscribeProducts(firebaseUser.uid, isBootstrap, (remoteProducts) => {
+            if (!active) return;
+            if (remoteProducts.length > 0) {
+              skipNextFirestoreProductsPushRef.current = true;
+              setProducts(remoteProducts);
+            }
+          })
+        );
+
+        unsubscribers.push(
+          subscribePosOrders(
+            firebaseUser.uid,
+            isBootstrap,
+            syncedUser.role === 'master',
+            (remoteOrders) => {
+              if (!active || remoteOrders.length === 0) return;
+              setOrders((prev) => {
+                const map = new Map<string, Order>();
+                for (const ro of remoteOrders) map.set(ro.id, ro);
+                for (const lo of prev) {
+                  if (!map.has(lo.id)) map.set(lo.id, lo);
+                }
+                return Array.from(map.values()).sort(
+                  (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+                );
+              });
+            }
+          )
+        );
+
+        if (isBootstrap) {
+          unsubscribers.push(
+            subscribeManagedUsers(true, (fbUsers) => {
+              if (!active) return;
+              setUsers(fbUsers);
+              setFirestoreStaffUids(fbUsers.map((u) => u.id));
+            })
+          );
+
+          void seedInitialStoreAndProductsIfEmpty(
+            firebaseUser.uid,
+            latestStoreRef.current,
+            latestProductsRef.current
+          ).catch(() => {
+            if (active) {
+              setSyncWarning(
+                'Sebagian data awal gagal disinkronkan ke cloud. Pastikan koneksi internet stabil.'
+              );
+            }
+          });
         }
 
-        if (shouldAdoptStore) {
-          skipNextCatalogPushRef.current = true;
-          setStore(snap.store);
-          try {
-            const serverTs = snap.updatedAt ? new Date(snap.updatedAt).getTime() : Date.now();
-            localStorage.setItem('kasirku_store_updated_at_v1', String(serverTs));
-          } catch {
-            // ignore
-          }
-        }
-      }
-
-      if (!isCustomerPortalActive && snap.products && snap.products.length > 0) {
-        if (!currentUser || currentUser.role !== 'master' || adoptedNewerMasterSnapshot) {
-          skipNextCatalogPushRef.current = true;
-          setProducts(snap.products);
-        }
-      }
-    };
-
-    void onlineOrdersManager
-      .fetchCatalogFromServer()
-      .then((snap) => {
-        if (snap) {
-          applyIncomingCatalog(snap, true);
-        }
+        setIsFirestoreReady(true);
       })
-      .finally(() => {
-        if (active) setIsCatalogReady(true);
+      .catch(() => {
+        if (!active) return;
+        setIsResolvingProfile(false);
+        setAuthError(
+          'Gagal memverifikasi profil pengguna dengan server. Periksa koneksi internet dan coba masuk ulang.'
+        );
       });
-
-    const unsubscribe = onlineOrdersManager.subscribeCatalog((snap) => {
-      applyIncomingCatalog(snap, false);
-    });
 
     return () => {
       active = false;
-      unsubscribe();
+      unsubscribers.forEach((unsub) => unsub());
     };
-  }, [isCustomerPortalActive, currentUser?.id, currentUser?.role]);
+  }, [authReady, firebaseUser, signOutFirebase]);
 
-  // Only Owner (master) pushes store/QRIS & menu catalog updates to server after initial hydration
+  // Persist store edits to Firestore for authenticated Master accounts
   useEffect(() => {
-    if (!isCatalogReady || isCustomerPortalActive || currentUser?.role !== 'master') {
+    if (
+      !authReady ||
+      !firebaseUser ||
+      !isFirestoreReady ||
+      currentUser?.role !== 'master'
+    ) {
       return;
     }
 
-    if (skipNextCatalogPushRef.current) {
-      skipNextCatalogPushRef.current = false;
+    if (skipNextFirestoreStorePushRef.current) {
+      skipNextFirestoreStorePushRef.current = false;
       return;
     }
 
-    try {
-      localStorage.setItem('kasirku_store_updated_at_v1', String(Date.now()));
-    } catch {
-      // ignore
+    const ownerUid = firestoreOwnerUid || firebaseUser.uid;
+    const timer = window.setTimeout(() => {
+      void upsertStoreInFirestore(store, ownerUid, firestoreStaffUids).catch(() => {
+        setSyncWarning('Perubahan pengaturan toko gagal disinkronkan ke database cloud.');
+      });
+    }, 500);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    authReady,
+    firebaseUser,
+    isFirestoreReady,
+    currentUser?.role,
+    store,
+    firestoreOwnerUid,
+    firestoreStaffUids,
+  ]);
+
+  // Persist product catalog edits to Firestore for authenticated Master accounts
+  useEffect(() => {
+    if (
+      !authReady ||
+      !firebaseUser ||
+      !isFirestoreReady ||
+      currentUser?.role !== 'master'
+    ) {
+      return;
     }
 
-    void onlineOrdersManager.syncCatalogToServer(store, products).then((synced) => {
-      if (synced?.updatedAt) {
-        lastAppliedCatalogAtRef.current = synced.updatedAt;
-      }
-      setRemoteCatalog({ store, products });
-    });
-  }, [isCatalogReady, currentUser?.role, isCustomerPortalActive, store, products]);
-
-  const pendingOnlineOrdersCount = useMemo(() => {
-    return onlineOrders.filter(
-      (o) =>
-        o.status === 'pending' &&
-        (o.paymentPreference !== 'qris_online' || o.paymentStatus === 'paid')
-    ).length;
-  }, [onlineOrders]);
-
-  const handleLoadOnlineOrderToPOS = (onlineOrder: OnlineOrder) => {
-    sounds.playItemBeep();
-    setCart([...onlineOrder.items]);
-    setCustomerName(onlineOrder.customerName);
-    setTableNumber(onlineOrder.tableNumber || '');
-    setOrderType(onlineOrder.orderType);
-    setGlobalDiscountPercent(0);
-    setActiveOnlineOrderId(onlineOrder.id);
-    setActiveOnlinePaymentPref(onlineOrder.paymentPreference || null);
-    setActiveTab('pos');
-    if (onlineOrder.status === 'pending') {
-      void onlineOrdersManager.updateOrderStatus(onlineOrder.id, 'accepted');
+    if (skipNextFirestoreProductsPushRef.current) {
+      skipNextFirestoreProductsPushRef.current = false;
+      return;
     }
-  };
+
+    const ownerUid = firestoreOwnerUid || firebaseUser.uid;
+    const timer = window.setTimeout(() => {
+      void syncProductsBatchToFirestore(products, ownerUid, firestoreStaffUids).catch(() => {
+        setSyncWarning('Perubahan katalog produk gagal disinkronkan ke database cloud.');
+      });
+    }, 600);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    authReady,
+    firebaseUser,
+    isFirestoreReady,
+    currentUser?.role,
+    products,
+    firestoreOwnerUid,
+    firestoreStaffUids,
+  ]);
 
   // Cart totals for payment modal
   const cartSubtotal = useMemo(() => {
-    return cart.reduce((sum, item) => sum + item.product.price * item.quantity - (item.discount || 0), 0);
+    return cart.reduce(
+      (sum, item) => sum + item.product.price * item.quantity - (item.discount || 0),
+      0
+    );
   }, [cart]);
 
   // Derived nominal discount from percentage
@@ -525,7 +490,12 @@ export default function App() {
     if (!store.enableServiceCharge) return 0;
     const base = Math.max(0, cartSubtotal - globalDiscountAmount);
     return Math.round(base * (store.serviceChargePercentage / 100));
-  }, [cartSubtotal, globalDiscountAmount, store.enableServiceCharge, store.serviceChargePercentage]);
+  }, [
+    cartSubtotal,
+    globalDiscountAmount,
+    store.enableServiceCharge,
+    store.serviceChargePercentage,
+  ]);
 
   const grandTotal = useMemo(() => {
     return Math.max(0, cartSubtotal - globalDiscountAmount + taxAmount + serviceChargeAmount);
@@ -542,78 +512,121 @@ export default function App() {
     change: number;
     shouldAutoPrint: boolean;
   }) => {
-    const now = new Date();
-    const localTodayStr = getLocalDateString(now);
-    const dateStr = localTodayStr.replace(/-/g, '');
-    const todayOrders = orders.filter((o) => getLocalDateString(o.timestamp) === localTodayStr);
-    const maxOrderNum = todayOrders.reduce((max, o) => Math.max(max, o.orderNumber || 0), 0);
-    const nextOrderNum = maxOrderNum + 1;
-    const orderId = `ORD-${dateStr}-${String(nextOrderNum).padStart(3, '0')}`;
+    if (isCompletingOrderRef.current || cart.length === 0) return;
 
-    const newOrder: Order = {
-      id: orderId,
-      orderNumber: nextOrderNum,
-      timestamp: now.toISOString(),
-      cashierName: currentUser ? currentUser.name : 'Kasir',
-      customerName: customerName.trim() || undefined,
-      tableNumber: tableNumber.trim() || undefined,
-      orderType,
-      items: [...cart],
-      subtotal: cartSubtotal,
-      discount: globalDiscountAmount,
-      discountPercent: globalDiscountPercent,
-      taxRate: store.enableTax ? store.taxPercentage / 100 : 0,
-      taxAmount,
-      serviceChargeRate: store.enableServiceCharge ? store.serviceChargePercentage / 100 : 0,
-      serviceChargeAmount,
-      total: grandTotal,
-      paymentMethod: details.paymentMethod,
-      amountPaid: details.amountPaid,
-      change: details.change,
-      status: 'completed',
-    };
-
-    // Decrement inventory stock
-    setProducts((prev) =>
-      prev.map((p) => {
-        const cartMatch = cart.find((i) => i.product.id === p.id);
-        if (cartMatch) {
-          return { ...p, stock: Math.max(0, p.stock - cartMatch.quantity) };
-        }
-        return p;
-      })
-    );
-
-    // Save order
-    setOrders((prev) => [newOrder, ...prev]);
-
-    // Mark linked online order as completed if applicable
-    if (activeOnlineOrderId) {
-      void onlineOrdersManager.updateOrderStatus(activeOnlineOrderId, 'completed');
-      setActiveOnlineOrderId(null);
-    }
-
-    // Reset current POS inputs
-    setCart([]);
-    setCustomerName('');
-    setTableNumber('');
-    setGlobalDiscountPercent(0);
-    setIsPaymentModalOpen(false);
-
-    // Open receipt modal
-    setReceiptOrder(newOrder);
-    setIsReceiptModalOpen(true);
-
-    // Auto-print to Bluetooth if requested and printer connected
-    if (details.shouldAutoPrint && printerState.isConnected) {
-      try {
-        const bytes = bluetoothPrinter.generateReceiptBytes(newOrder, store, printerConfig);
-        await bluetoothPrinter.sendRawData(bytes);
-        sounds.playThermalTick();
-      } catch (err) {
-        console.warn('Auto print failed:', err);
+    // Validate stock availability before finalizing
+    for (const item of cart) {
+      const latestProd = products.find((p) => p.id === item.product.id);
+      if (!latestProd || item.quantity > latestProd.stock) {
+        setSyncWarning(
+          `Stok untuk "${item.product.name}" tidak mencukupi (tersedia ${latestProd?.stock ?? 0} pcs).`
+        );
+        sounds.playError();
+        return;
       }
     }
+
+    isCompletingOrderRef.current = true;
+
+    try {
+      const now = new Date();
+      const localTodayStr = getLocalDateString(now);
+      const dateStr = localTodayStr.replace(/-/g, '');
+      const todayOrders = orders.filter((o) => getLocalDateString(o.timestamp) === localTodayStr);
+      const maxOrderNum = todayOrders.reduce((max, o) => Math.max(max, o.orderNumber || 0), 0);
+      const nextOrderNum = maxOrderNum + 1;
+      const orderId = `ORD-${dateStr}-${String(nextOrderNum).padStart(3, '0')}`;
+
+      const newOrder: Order = {
+        id: orderId,
+        orderNumber: nextOrderNum,
+        timestamp: now.toISOString(),
+        cashierName: currentUser ? currentUser.name : 'Kasir',
+        customerName: customerName.trim().slice(0, 120) || undefined,
+        tableNumber: tableNumber.trim().slice(0, 40) || undefined,
+        orderType,
+        items: [...cart],
+        subtotal: cartSubtotal,
+        discount: globalDiscountAmount,
+        discountPercent: globalDiscountPercent,
+        taxRate: store.enableTax ? store.taxPercentage / 100 : 0,
+        taxAmount,
+        serviceChargeRate: store.enableServiceCharge
+          ? store.serviceChargePercentage / 100
+          : 0,
+        serviceChargeAmount,
+        total: grandTotal,
+        paymentMethod: details.paymentMethod,
+        amountPaid: details.amountPaid,
+        change: details.change,
+        status: 'completed',
+      };
+
+      const stockUpdates: Array<{ productId: string; newStock: number }> = [];
+      const nextProducts = products.map((p) => {
+        const cartMatch = cart.find((i) => i.product.id === p.id);
+        if (cartMatch) {
+          const updatedStock = Math.max(0, p.stock - cartMatch.quantity);
+          stockUpdates.push({ productId: p.id, newStock: updatedStock });
+          return { ...p, stock: updatedStock };
+        }
+        return p;
+      });
+
+      // Avoid redundant full-catalog write when we commit targeted stock updates below
+      if (currentUser?.role === 'master') {
+        skipNextFirestoreProductsPushRef.current = true;
+      }
+      setProducts(nextProducts);
+      setOrders((prev) => [newOrder, ...prev]);
+
+      if (authReady && firebaseUser) {
+        const ownerUid = firestoreOwnerUid || firebaseUser.uid;
+        void Promise.all([
+          savePosOrderToFirestore(newOrder, ownerUid, firebaseUser.uid, firestoreStaffUids),
+          decrementProductsStockInFirestore(stockUpdates),
+        ]).catch(() => {
+          setSyncWarning(
+            'Transaksi tersimpan di perangkat, namun gagal disinkronkan ke cloud server.'
+          );
+        });
+      }
+
+      // Reset current POS inputs
+      setCart([]);
+      setCustomerName('');
+      setTableNumber('');
+      setGlobalDiscountPercent(0);
+      setIsPaymentModalOpen(false);
+
+      // Open receipt modal
+      setReceiptOrder(newOrder);
+      setIsReceiptModalOpen(true);
+
+      // Auto-print to Bluetooth if requested and printer connected
+      if (details.shouldAutoPrint && printerState.isConnected) {
+        try {
+          const bytes = bluetoothPrinter.generateReceiptBytes(newOrder, store, printerConfig);
+          await bluetoothPrinter.sendRawData(bytes);
+          sounds.playThermalTick();
+        } catch {
+          // Printer print error shouldn't fail order
+        }
+      }
+    } finally {
+      isCompletingOrderRef.current = false;
+    }
+  };
+
+  // Cancel completed order (Master only) with Firestore sync
+  const handleCancelOrderInFirestore = async (orderId: string) => {
+    if (currentUser?.role !== 'master') return;
+    if (authReady && firebaseUser) {
+      await updatePosOrderStatusInFirestore(orderId, 'cancelled');
+    }
+    setOrders((prev) =>
+      prev.map((o) => (o.id === orderId ? { ...o, status: 'cancelled' } : o))
+    );
   };
 
   // Quick connect trigger from navbar
@@ -647,56 +660,47 @@ export default function App() {
 
   const handleConfirmLogout = () => {
     sounds.playItemBeep();
+    void signOutFirebase().catch(() => {});
     setCurrentUser(null);
-    localStorage.removeItem(STORAGE_KEY_AUTH);
     setCart([]);
     setActiveTab('pos');
     setIsLogoutModalOpen(false);
   };
 
-  // Reset demo data handler
+  // Reset demo data handler (excludes user accounts & keeps auth intact)
   const handleResetData = () => {
     setStore(DEFAULT_STORE_PROFILE);
     setProducts(INITIAL_PRODUCTS);
     setOrders(getInitialOrders());
     setPrinterConfig(DEFAULT_PRINTER_CONFIG);
-    setUsers(DEFAULT_USERS);
     setCart([]);
     sounds.playCashRegister();
   };
 
-  const handleImportData = (data: any) => {
-    if (data.store) setStore(data.store);
-    if (data.products) setProducts(data.products);
-    if (data.orders) setOrders(data.orders);
-    if (data.printerConfig) setPrinterConfig(data.printerConfig);
-    if (data.users) setUsers(data.users);
+  const handleImportData = (data: Record<string, unknown>) => {
+    if (data.store) {
+      setStore(sanitizeStoreProfile(data.store, DEFAULT_STORE_PROFILE));
+    }
+    if (data.products) {
+      setProducts(sanitizeProductList(data.products, products));
+    }
+    if (data.orders) {
+      setOrders(sanitizeOrderList(data.orders, orders));
+    }
+    if (data.printerConfig) {
+      setPrinterConfig(sanitizePrinterConfig(data.printerConfig, DEFAULT_PRINTER_CONFIG));
+    }
   };
 
-  // If Customer Order Portal is active (e.g. Scanned QR Code Meja / Online link)
-  if (isCustomerPortalActive) {
-    const portalStore = remoteCatalog?.store || store;
-    const portalProducts =
-      remoteCatalog?.products && remoteCatalog.products.length > 0
-        ? remoteCatalog.products
-        : products;
-
-    return (
-      <CustomerOrderPortal
-        products={portalProducts}
-        store={portalStore}
-        printerConfig={printerConfig}
-        initialTable={customerPortalTable}
-      />
-    );
-  }
-
-  // If not logged in, render the Login Page
-  if (!currentUser) {
+  // Enforce authenticated Firebase session + active Firestore profile
+  if (!authReady || isResolvingProfile || !firebaseUser || !currentUser) {
     return (
       <LoginPage
         store={store}
-        users={users}
+        authReady={authReady}
+        isResolvingProfile={isResolvingProfile}
+        externalError={authError}
+        onClearExternalError={() => setAuthError(null)}
         onLogin={(user) => {
           setCurrentUser(user);
           setActiveTab('pos');
@@ -706,10 +710,11 @@ export default function App() {
   }
 
   const isMaster = currentUser.role === 'master';
+  const isBootstrap = isBootstrapAdminUser(firebaseUser);
 
   return (
     <div className="h-screen bg-slate-100 flex flex-col text-slate-800 overflow-hidden relative">
-      {/* Top Navbar: Brand Logo, Store Name, Bluetooth status, and Logged-in Administrator */}
+      {/* Top Navbar */}
       <Navbar
         store={store}
         printerState={printerState}
@@ -719,33 +724,34 @@ export default function App() {
         onOpenPrinterModal={() => setIsPrinterModalOpen(true)}
         onQuickConnectBluetooth={handleQuickConnect}
         onOpenLogoManager={() => setActiveTab('logo')}
-        pendingOnlineOrdersCount={pendingOnlineOrdersCount}
-        onOpenOnlineOrders={() => setActiveTab('online_orders')}
-        onOpenTableQR={() => setActiveTab('table_qr')}
+        isSidebarOpen={isSidebarOpen}
+        onToggleSidebar={handleToggleSidebar}
       />
 
-      {/* Button Garis Tiga (Menu) di Sudut Kiri Bawah - di luar kotak header */}
-      <button
-        type="button"
-        onClick={handleToggleSidebar}
-        className={`fixed bottom-5 left-5 z-50 w-12 h-12 rounded-2xl flex items-center justify-center transition-all cursor-pointer shadow-xl active:scale-90 border ${
-          isSidebarOpen
-            ? 'bg-slate-800 hover:bg-slate-900 text-white border-slate-700 shadow-slate-900/30'
-            : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-500 shadow-emerald-700/40 ring-4 ring-emerald-500/20'
-        }`}
-        title={isSidebarOpen ? 'Sembunyikan Menu Navigasi' : 'Tampilkan Menu Navigasi'}
-      >
-        <Menu className="w-6 h-6" />
-      </button>
+      {/* Cloud Sync Warning Banner (Non-blocking) */}
+      {syncWarning && (
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 text-xs text-amber-900 flex items-center justify-between gap-3 shrink-0">
+          <div className="flex items-center gap-2 font-semibold">
+            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>{syncWarning}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSyncWarning(null)}
+            className="text-amber-700 hover:text-amber-900 p-0.5 rounded cursor-pointer"
+            title="Tutup pemberitahuan"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
-      {/* Main Workspace Body with Left Sidebar and Main Content Router */}
+      {/* Main Workspace Body */}
       <div className="flex-1 flex overflow-hidden relative">
-        {/* Dedicated Left Navigation Menu (Bisa dihilangkan & ditimbulkan kembali) */}
         <Sidebar
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           cartCount={totalCartCount}
-          pendingOnlineCount={pendingOnlineOrdersCount}
           currentUser={currentUser}
           isSidebarOpen={isSidebarOpen}
           setIsSidebarOpen={(open) => {
@@ -758,7 +764,6 @@ export default function App() {
           }}
         />
 
-        {/* Main View Router */}
         <main className="flex-1 overflow-y-auto min-w-0 pb-16">
           {activeTab === 'pos' && (
             <CashierPOSView
@@ -776,52 +781,6 @@ export default function App() {
               setGlobalDiscountPercent={setGlobalDiscountPercent}
               lowStockThreshold={store.lowStockThreshold || 10}
               onOpenPaymentModal={() => setIsPaymentModalOpen(true)}
-              pendingOnlineOrdersCount={pendingOnlineOrdersCount}
-              onNavigateToOnlineOrders={() => setActiveTab('online_orders')}
-              onNavigateToTableQR={() => setActiveTab('table_qr')}
-            />
-          )}
-
-          {activeTab === 'online_orders' && (
-            <OnlineOrdersView
-              onlineOrders={onlineOrders}
-              products={products}
-              store={store}
-              printerConfig={printerConfig}
-              printerState={printerState}
-              onLoadOrderToPOS={handleLoadOnlineOrderToPOS}
-              onOpenCustomerView={(tbl) => {
-                if (isMaster) {
-                  void onlineOrdersManager.syncCatalogToServer(store, products);
-                }
-                if (typeof window !== 'undefined' && window.history) {
-                  const targetUrl = tbl
-                    ? `${window.location.pathname}?mode=order&table=${encodeURIComponent(tbl)}`
-                    : `${window.location.pathname}?mode=order`;
-                  window.history.pushState({ portal: true }, '', targetUrl);
-                }
-                setCustomerPortalTable(tbl || '');
-                setIsCustomerPortalActive(true);
-              }}
-            />
-          )}
-
-          {activeTab === 'table_qr' && (
-            <TableQRView
-              store={store}
-              onOpenCustomerView={(tbl) => {
-                if (isMaster) {
-                  void onlineOrdersManager.syncCatalogToServer(store, products);
-                }
-                if (typeof window !== 'undefined' && window.history) {
-                  const targetUrl = tbl
-                    ? `${window.location.pathname}?mode=order&table=${encodeURIComponent(tbl)}`
-                    : `${window.location.pathname}?mode=order`;
-                  window.history.pushState({ portal: true }, '', targetUrl);
-                }
-                setCustomerPortalTable(tbl || '');
-                setIsCustomerPortalActive(true);
-              }}
             />
           )}
 
@@ -846,7 +805,7 @@ export default function App() {
           {activeTab === 'history' && (
             <TransactionHistoryView
               orders={orders}
-              setOrders={setOrders}
+              onCancelOrder={handleCancelOrderInFirestore}
               isMaster={isMaster}
               store={store}
               onSelectOrderReceipt={(order) => {
@@ -870,6 +829,7 @@ export default function App() {
               users={users}
               setUsers={setUsers}
               currentUser={currentUser}
+              isBootstrapAdmin={isBootstrap}
             />
           )}
 
@@ -891,7 +851,7 @@ export default function App() {
               printerState={printerState}
               onOpenPrinterModal={() => setIsPrinterModalOpen(true)}
               onResetData={handleResetData}
-              fullDataPayload={{ store, products, orders, printerConfig, users }}
+              fullDataPayload={{ store, products, orders, printerConfig }}
               onImportData={handleImportData}
               onOpenLogoManager={() => setActiveTab('logo')}
               onQuickConnectBluetooth={handleQuickConnect}
@@ -911,7 +871,9 @@ export default function App() {
         taxAmount={taxAmount}
         taxRate={store.enableTax ? store.taxPercentage / 100 : 0}
         serviceChargeAmount={serviceChargeAmount}
-        serviceChargeRate={store.enableServiceCharge ? store.serviceChargePercentage / 100 : 0}
+        serviceChargeRate={
+          store.enableServiceCharge ? store.serviceChargePercentage / 100 : 0
+        }
         total={grandTotal}
         customerName={customerName}
         tableNumber={tableNumber}
@@ -920,7 +882,7 @@ export default function App() {
         store={store}
         printerConfig={printerConfig}
         isMaster={isMaster}
-        defaultPaymentMethod={activeOnlinePaymentPref === 'qris_online' ? 'qris' : 'cash'}
+        defaultPaymentMethod="cash"
         onUpdateStore={setStore}
         onCompleteOrder={handleCompleteOrder}
       />
@@ -1025,77 +987,6 @@ export default function App() {
               </div>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* Floating Toast Notification for Incoming Online Order */}
-      {newOrderToast && (
-        <div className="fixed top-20 right-5 z-50 bg-slate-950 text-white p-4 rounded-2xl shadow-2xl border-2 border-emerald-500 animate-in slide-in-from-top-4 flex items-center gap-3.5 max-w-sm">
-          <div className="w-10 h-10 rounded-xl bg-emerald-500 text-slate-950 flex items-center justify-center font-bold text-sm shrink-0">
-            <ShoppingBag className="w-5 h-5 animate-bounce" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs font-black text-emerald-400">Pesanan Online Baru!</span>
-              <span className="text-[10px] bg-slate-800 text-slate-300 font-mono px-1 rounded">
-                #{newOrderToast.orderCode}
-              </span>
-            </div>
-            <p className="text-xs font-bold text-white truncate">
-              {newOrderToast.customerName} {newOrderToast.tableNumber ? `• Meja ${newOrderToast.tableNumber}` : ''}
-            </p>
-            <span className="text-[11px] text-emerald-300 font-mono font-semibold">
-              {newOrderToast.items.reduce((s, i) => s + i.quantity, 0)} menu dipesan
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('online_orders');
-              setNewOrderToast(null);
-            }}
-            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shrink-0 cursor-pointer shadow-xs"
-          >
-            Buka
-          </button>
-        </div>
-      )}
-
-      {/* Floating Toast Notification for Automated QRIS Payment Settlement */}
-      {qrisPaidToast && (
-        <div
-          className={`fixed right-5 z-50 bg-emerald-950 text-white p-4 rounded-2xl shadow-2xl border-2 border-teal-400 animate-in slide-in-from-top-4 flex items-center gap-3.5 max-w-sm ${
-            newOrderToast ? 'top-44' : 'top-20'
-          }`}
-        >
-          <div className="w-10 h-10 rounded-xl bg-teal-400 text-emerald-950 flex items-center justify-center font-bold text-sm shrink-0">
-            <QrCode className="w-5 h-5" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1.5">
-              <CheckCircle2 className="w-3.5 h-3.5 text-teal-300 shrink-0" />
-              <span className="text-xs font-black text-teal-300">QRIS Diterima • Proses Dapur!</span>
-              <span className="text-[10px] bg-emerald-900 text-emerald-100 font-mono px-1 rounded">
-                #{qrisPaidToast.order.orderCode}
-              </span>
-            </div>
-            <p className="text-xs font-bold text-white truncate">
-              {qrisPaidToast.order.customerName} • {formatRupiah(qrisPaidToast.order.total)}
-            </p>
-            <span className="text-[11px] text-emerald-300 font-mono font-semibold block truncate">
-              Lunas & otomatis diteruskan ke Dapur
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('online_orders');
-              setQrisPaidToast(null);
-            }}
-            className="px-3 py-1.5 bg-teal-500 hover:bg-teal-400 text-slate-950 rounded-xl text-xs font-bold shrink-0 cursor-pointer shadow-xs"
-          >
-            Lihat
-          </button>
         </div>
       )}
     </div>

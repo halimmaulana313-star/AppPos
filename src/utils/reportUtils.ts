@@ -5,6 +5,7 @@
 
 import { DailySalesReport, Order, StoreProfile } from '../types/pos';
 import { formatDateOnly, formatDateTime, formatRupiah, getLocalDateString } from './formatters';
+import { escapeHtml, sanitizeCsvCell, sanitizeFilename } from './sanitize';
 
 export function calculateDailyReport(orders: Order[], targetDate: string): DailySalesReport {
   const dayOrders = orders.filter((o) => {
@@ -150,10 +151,10 @@ export function generateReportHTMLTable(report: DailySalesReport, store: StorePr
     return `
       <tr style="background-color: ${bg};">
         <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${idx + 1}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 7px 10px; font-weight: 600;">${paymentNames[key] || key}</td>
+        <td style="border: 1px solid #cbd5e1; padding: 7px 10px; font-weight: 600;">${escapeHtml(paymentNames[key] || key)}</td>
         <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${data.count} Trx</td>
         <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${trxPct}%</td>
-        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-weight: bold; font-family: monospace;">${formatRupiah(data.total)}</td>
+        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-weight: bold; font-family: monospace;">${escapeHtml(formatRupiah(data.total))}</td>
         <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${amountPct}%</td>
       </tr>
     `;
@@ -169,10 +170,10 @@ export function generateReportHTMLTable(report: DailySalesReport, store: StorePr
     return `
       <tr style="background-color: ${bg};">
         <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${idx + 1}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 7px 10px; font-weight: 600;">${p.name}</td>
+        <td style="border: 1px solid #cbd5e1; padding: 7px 10px; font-weight: 600;">${escapeHtml(p.name)}</td>
         <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px; font-weight: bold;">${p.quantity} Pcs</td>
-        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-family: monospace;">${formatRupiah(avgPrice)}</td>
-        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-weight: bold; font-family: monospace;">${formatRupiah(p.totalRevenue)}</td>
+        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-family: monospace;">${escapeHtml(formatRupiah(avgPrice))}</td>
+        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-weight: bold; font-family: monospace;">${escapeHtml(formatRupiah(p.totalRevenue))}</td>
         <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${pct}%</td>
       </tr>
     `;
@@ -188,9 +189,9 @@ export function generateReportHTMLTable(report: DailySalesReport, store: StorePr
     return `
       <tr style="background-color: ${bg};">
         <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${idx + 1}</td>
-        <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px; font-weight: 600;">${h.hour} - ${parseInt(h.hour) + 1}:00</td>
+        <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px; font-weight: 600;">${escapeHtml(h.hour)} - ${parseInt(h.hour, 10) + 1}:00</td>
         <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${h.count} Transaksi</td>
-        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-weight: bold; font-family: monospace;">${formatRupiah(h.total)}</td>
+        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-weight: bold; font-family: monospace;">${escapeHtml(formatRupiah(h.total))}</td>
         <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${pct}%</td>
       </tr>
     `;
@@ -207,15 +208,15 @@ export function generateReportHTMLTable(report: DailySalesReport, store: StorePr
     return `
       <tr style="background-color: ${bg};">
         <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${idx + 1}</td>
-        <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px; font-family: monospace; font-weight: bold;">#${tx.id}</td>
-        <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${txTime}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 7px 10px;">${tx.cashierName || 'Kasir'}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 7px 10px;">${cust}</td>
-        <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${paymentNames[tx.paymentMethod] || tx.paymentMethod.toUpperCase()}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 7px 10px; font-size: 10pt; color: #334155;">${itemsSummary}</td>
-        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-family: monospace;">${formatRupiah(tx.subtotal)}</td>
-        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-family: monospace; color: #dc2626;">${tx.discount > 0 ? (tx.discountPercent ? `${tx.discountPercent}% (-${formatRupiah(tx.discount)})` : `-${formatRupiah(tx.discount)}`) : 'Rp 0'}</td>
-        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-family: monospace; font-weight: bold; color: #047857;">${formatRupiah(tx.total)}</td>
+        <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px; font-family: monospace; font-weight: bold;">#${escapeHtml(tx.id)}</td>
+        <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${escapeHtml(txTime)}</td>
+        <td style="border: 1px solid #cbd5e1; padding: 7px 10px;">${escapeHtml(tx.cashierName || 'Kasir')}</td>
+        <td style="border: 1px solid #cbd5e1; padding: 7px 10px;">${escapeHtml(cust)}</td>
+        <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${escapeHtml(paymentNames[tx.paymentMethod] || tx.paymentMethod.toUpperCase())}</td>
+        <td style="border: 1px solid #cbd5e1; padding: 7px 10px; font-size: 10pt; color: #334155;">${escapeHtml(itemsSummary)}</td>
+        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-family: monospace;">${escapeHtml(formatRupiah(tx.subtotal))}</td>
+        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-family: monospace; color: #dc2626;">${tx.discount > 0 ? escapeHtml(tx.discountPercent ? `${tx.discountPercent}% (-${formatRupiah(tx.discount)})` : `-${formatRupiah(tx.discount)}`) : 'Rp 0'}</td>
+        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-family: monospace; font-weight: bold; color: #047857;">${escapeHtml(formatRupiah(tx.total))}</td>
         <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px; color: #059669; font-weight: 600;">Selesai</td>
       </tr>
     `;
@@ -225,7 +226,7 @@ export function generateReportHTMLTable(report: DailySalesReport, store: StorePr
 <html lang="id">
 <head>
   <meta charset="UTF-8">
-  <title>Laporan Penjualan Harian - ${store.storeName} - ${report.date}</title>
+  <title>Laporan Penjualan Harian - ${escapeHtml(store.storeName)} - ${escapeHtml(report.date)}</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -348,14 +349,14 @@ export function generateReportHTMLTable(report: DailySalesReport, store: StorePr
     <table style="border: none; margin-bottom: 0;">
       <tr style="border: none; background: transparent;">
         <td style="border: none; padding: 0; vertical-align: top;">
-          <h1 class="store-title">${store.storeName}</h1>
-          <p class="store-subtitle">${store.address || 'Alamat Toko'} &bull; Telp: ${store.phone || '-'}</p>
+          <h1 class="store-title">${escapeHtml(store.storeName)}</h1>
+          <p class="store-subtitle">${escapeHtml(store.address || 'Alamat Toko')} &bull; Telp: ${escapeHtml(store.phone || '-')}</p>
           <div class="report-title-badge">LAPORAN PENJUALAN HARIAN (Z-REPORT)</div>
         </td>
         <td style="border: none; padding: 0; text-align: right; vertical-align: top;">
           <div style="font-size: 12px; color: #475569;">
-            <div><strong>Tanggal Transaksi:</strong> ${formatDateOnly(report.date)}</div>
-            <div><strong>Waktu Ekspor:</strong> ${exportTime}</div>
+            <div><strong>Tanggal Transaksi:</strong> ${escapeHtml(formatDateOnly(report.date))}</div>
+            <div><strong>Waktu Ekspor:</strong> ${escapeHtml(exportTime)}</div>
             <div><strong>Status Kasir:</strong> Tutup Buku Harian</div>
           </div>
         </td>
@@ -540,7 +541,7 @@ export function exportReportToExcel(report: DailySalesReport, store: StoreProfil
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `Laporan_Tabel_Kasir_${report.date}_${store.storeName.replace(/\s+/g, '_')}.xls`;
+  link.download = `Laporan_Tabel_Kasir_${sanitizeFilename(report.date, 'tanggal')}_${sanitizeFilename(store.storeName, 'Toko')}.xls`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -556,7 +557,7 @@ export function exportReportToHTML(report: DailySalesReport, store: StoreProfile
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `Laporan_Dokumen_Tabel_${report.date}_${store.storeName.replace(/\s+/g, '_')}.html`;
+  link.download = `Laporan_Dokumen_Tabel_${sanitizeFilename(report.date, 'tanggal')}_${sanitizeFilename(store.storeName, 'Toko')}.html`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -634,13 +635,21 @@ export function exportReportToCSV(report: DailySalesReport, storeName: string): 
     ]);
   });
 
-  // Prefix with UTF-8 BOM so Excel opens it with proper character encoding
-  const csvContent = '\uFEFF' + rows.map((e) => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+  // Prefix with UTF-8 BOM and neutralize CSV spreadsheet formula injection
+  const csvContent =
+    '\uFEFF' +
+    rows
+      .map((row) =>
+        row
+          .map((val) => `"${sanitizeCsvCell(val).replace(/"/g, '""')}"`)
+          .join(',')
+      )
+      .join('\r\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `Laporan_Kasir_${report.date}_${storeName.replace(/\s+/g, '_')}.csv`;
+  link.download = `Laporan_Kasir_${sanitizeFilename(report.date, 'tanggal')}_${sanitizeFilename(storeName, 'Toko')}.csv`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -678,15 +687,15 @@ export function exportTransactionsToExcel(orders: Order[], store: StoreProfile, 
     return `
       <tr style="background-color: ${bg};">
         <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${idx + 1}</td>
-        <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px; font-family: monospace; font-weight: bold;">#${tx.id}</td>
-        <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${formatDateTime(tx.timestamp)}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 7px 10px;">${tx.cashierName || 'Kasir'}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 7px 10px;">${cust}</td>
-        <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${paymentNames[tx.paymentMethod] || tx.paymentMethod.toUpperCase()}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 7px 10px; font-size: 10pt; color: #334155;">${itemsSummary}</td>
-        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-family: monospace;">${formatRupiah(tx.subtotal)}</td>
-        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-family: monospace; color: #dc2626;">${tx.discount > 0 ? (tx.discountPercent ? `${tx.discountPercent}% (-${formatRupiah(tx.discount)})` : `-${formatRupiah(tx.discount)}`) : 'Rp 0'}</td>
-        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-family: monospace; font-weight: bold; color: #047857;">${formatRupiah(tx.total)}</td>
+        <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px; font-family: monospace; font-weight: bold;">#${escapeHtml(tx.id)}</td>
+        <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${escapeHtml(formatDateTime(tx.timestamp))}</td>
+        <td style="border: 1px solid #cbd5e1; padding: 7px 10px;">${escapeHtml(tx.cashierName || 'Kasir')}</td>
+        <td style="border: 1px solid #cbd5e1; padding: 7px 10px;">${escapeHtml(cust)}</td>
+        <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px;">${escapeHtml(paymentNames[tx.paymentMethod] || tx.paymentMethod.toUpperCase())}</td>
+        <td style="border: 1px solid #cbd5e1; padding: 7px 10px; font-size: 10pt; color: #334155;">${escapeHtml(itemsSummary)}</td>
+        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-family: monospace;">${escapeHtml(formatRupiah(tx.subtotal))}</td>
+        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-family: monospace; color: #dc2626;">${tx.discount > 0 ? escapeHtml(tx.discountPercent ? `${tx.discountPercent}% (-${formatRupiah(tx.discount)})` : `-${formatRupiah(tx.discount)}`) : 'Rp 0'}</td>
+        <td style="text-align: right; border: 1px solid #cbd5e1; padding: 7px 10px; font-family: monospace; font-weight: bold; color: #047857;">${escapeHtml(formatRupiah(tx.total))}</td>
         <td style="text-align: center; border: 1px solid #cbd5e1; padding: 7px 10px; font-weight: 600; color: ${tx.status === 'completed' ? '#059669' : '#dc2626'};">${tx.status === 'completed' ? 'Selesai' : 'Dibatalkan'}</td>
       </tr>
     `;
@@ -696,7 +705,7 @@ export function exportTransactionsToExcel(orders: Order[], store: StoreProfile, 
 <html lang="id">
 <head>
   <meta charset="UTF-8">
-  <title>Riwayat Transaksi - ${store.storeName}</title>
+  <title>Riwayat Transaksi - ${escapeHtml(store.storeName)}</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -711,8 +720,8 @@ export function exportTransactionsToExcel(orders: Order[], store: StoreProfile, 
 </head>
 <body>
   <div style="border-bottom: 2px solid #059669; padding-bottom: 12px; margin-bottom: 16px;">
-    <h2 style="margin: 0; color: #065f46;">${store.storeName} - ${customTitle || 'Daftar Riwayat Transaksi'}</h2>
-    <p style="margin: 4px 0 0; color: #64748b; font-size: 11pt;">Waktu Ekspor: ${exportTime} &bull; Total: ${orders.length} Transaksi</p>
+    <h2 style="margin: 0; color: #065f46;">${escapeHtml(store.storeName)} - ${escapeHtml(customTitle || 'Daftar Riwayat Transaksi')}</h2>
+    <p style="margin: 4px 0 0; color: #64748b; font-size: 11pt;">Waktu Ekspor: ${escapeHtml(exportTime)} &bull; Total: ${orders.length} Transaksi</p>
   </div>
   <table>
     <thead>
@@ -734,9 +743,9 @@ export function exportTransactionsToExcel(orders: Order[], store: StoreProfile, 
       ${rows}
       <tr style="background-color: #ecfdf5; font-weight: bold; border-top: 2px solid #047857;">
         <td colspan="7" style="text-align: center;">TOTAL AKUMULASI TRANSAKSI</td>
-        <td style="text-align: right; font-family: monospace;">${formatRupiah(grandTotal + totalDiscounts)}</td>
-        <td style="text-align: right; font-family: monospace; color: #dc2626;">-${formatRupiah(totalDiscounts)}</td>
-        <td style="text-align: right; font-family: monospace; color: #047857;">${formatRupiah(grandTotal)}</td>
+        <td style="text-align: right; font-family: monospace;">${escapeHtml(formatRupiah(grandTotal + totalDiscounts))}</td>
+        <td style="text-align: right; font-family: monospace; color: #dc2626;">-${escapeHtml(formatRupiah(totalDiscounts))}</td>
+        <td style="text-align: right; font-family: monospace; color: #047857;">${escapeHtml(formatRupiah(grandTotal))}</td>
         <td style="text-align: center;">-</td>
       </tr>
     </tbody>
@@ -748,7 +757,7 @@ export function exportTransactionsToExcel(orders: Order[], store: StoreProfile, 
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `Riwayat_Transaksi_Tabel_${store.storeName.replace(/\s+/g, '_')}_${new Date().toISOString().substring(0, 10)}.xls`;
+  link.download = `Riwayat_Transaksi_Tabel_${sanitizeFilename(store.storeName, 'Toko')}_${new Date().toISOString().substring(0, 10)}.xls`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

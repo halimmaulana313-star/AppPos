@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { AppUser, Order, PrinterConfig, Product, StoreProfile } from '../types/pos';
+import { Order, PrinterConfig, Product, StoreProfile } from '../types/pos';
 
 export const DEFAULT_STORE_PROFILE: StoreProfile = {
   storeName: 'KOPI LITERASI',
@@ -12,7 +12,7 @@ export const DEFAULT_STORE_PROFILE: StoreProfile = {
   phone: '0812-3456-7890',
   instagram: '@kopiliterasi',
   wifiName: 'KopiLiterasi_WiFi',
-  wifiPassword: 'literasiberkopi',
+  wifiPassword: '',
   footerNote: 'Terima kasih telah berkunjung ke Kopi Literasi!\nFollow IG kami @kopiliterasi',
   qrisMerchantName: 'KOPI LITERASI',
   qrisNmid: 'ID102003004005',
@@ -403,36 +403,3 @@ export function getInitialOrders(): Order[] {
     },
   ];
 }
-
-export const DEFAULT_USERS: AppUser[] = [
-  {
-    id: 'usr-master-001',
-    name: 'Master Toko (Owner)',
-    email: 'kopiliterasi12@gmail.com',
-    password: 'literasi03',
-    role: 'master',
-    phone: '0812-3456-7890',
-    isActive: true,
-    createdAt: '2026-01-01T08:00:00.000Z',
-  },
-  {
-    id: 'usr-cashier-001',
-    name: 'Budi Santoso',
-    email: 'budi.kasir@kopiliterasi.com',
-    password: 'kasir123',
-    role: 'cashier',
-    phone: '0812-9876-5432',
-    isActive: true,
-    createdAt: '2026-01-15T09:00:00.000Z',
-  },
-  {
-    id: 'usr-cashier-002',
-    name: 'Siti Rahma',
-    email: 'siti.kasir@kopiliterasi.com',
-    password: 'kasir123',
-    role: 'cashier',
-    phone: '0813-1122-3344',
-    isActive: true,
-    createdAt: '2026-02-01T10:00:00.000Z',
-  },
-];

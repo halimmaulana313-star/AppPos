@@ -1,0 +1,545 @@
+{
+  "entities": {
+    "AdminMember": {
+      "title": "AdminMember",
+      "description": "Registry of authorized store administrators and owners with full RBAC privileges.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the administrator"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 200,
+          "description": "Verified administrator email address"
+        },
+        "assignedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "UID of the admin who granted access"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when admin entry was created"
+        }
+      },
+      "required": ["uid", "email", "assignedBy", "createdAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Private user account profile containing role and contact PII restricted to owner and admin.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "User full display name"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 200,
+          "description": "User email address"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["master", "cashier"],
+          "description": "Application RBAC role"
+        },
+        "isActive": {
+          "type": "boolean",
+          "description": "Whether account is permitted to operate POS"
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "Optional staff contact phone number"
+        },
+        "photoURL": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Optional Google profile avatar URL"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable server creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of latest update"
+        },
+        "lastLoginAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of most recent sign-in"
+        }
+      },
+      "required": ["uid", "displayName", "email", "role", "isActive", "createdAt", "updatedAt"]
+    },
+    "StoreProfileDoc": {
+      "title": "StoreProfileDoc",
+      "description": "Store profile, tax/service configuration, and merchant QRIS details.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "staffUids": {
+          "type": "array",
+          "description": "Bounded list (max 20) of authorized staff UIDs"
+        },
+        "storeName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "tagline": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "address": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "instagram": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "wifiName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "wifiPassword": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "footerNote": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "logoUrl": {
+          "type": "string",
+          "maxLength": 350000
+        },
+        "qrisImageUrl": {
+          "type": "string",
+          "maxLength": 350000
+        },
+        "qrisMerchantName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "qrisNmid": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "enableTax": {
+          "type": "boolean"
+        },
+        "taxPercentage": {
+          "type": "number"
+        },
+        "enableServiceCharge": {
+          "type": "boolean"
+        },
+        "serviceChargePercentage": {
+          "type": "number"
+        },
+        "lowStockThreshold": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 10
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "staffUids",
+        "storeName",
+        "tagline",
+        "address",
+        "phone",
+        "footerNote",
+        "enableTax",
+        "taxPercentage",
+        "enableServiceCharge",
+        "serviceChargePercentage",
+        "currency",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ProductDoc": {
+      "title": "ProductDoc",
+      "description": "POS catalog item with pricing, cost price, SKU, and inventory stock.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "staffUids": {
+          "type": "array",
+          "description": "Bounded list (max 20) of authorized staff UIDs"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "price": {
+          "type": "number"
+        },
+        "costPrice": {
+          "type": "number"
+        },
+        "stock": {
+          "type": "number"
+        },
+        "sku": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "image": {
+          "type": "string",
+          "maxLength": 300000
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "color": {
+          "type": "string",
+          "maxLength": 30
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "staffUids",
+        "name",
+        "category",
+        "price",
+        "costPrice",
+        "stock",
+        "sku",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PosOrderDoc": {
+      "title": "PosOrderDoc",
+      "description": "Completed POS sales transaction header; line items stored in subcollection.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "cashierUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "staffUids": {
+          "type": "array",
+          "description": "Bounded list (max 20) of authorized staff UIDs"
+        },
+        "orderNumber": {
+          "type": "number"
+        },
+        "timestamp": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "cashierName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "customerName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "tableNumber": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "orderType": {
+          "type": "string",
+          "enum": ["dine_in", "takeaway", "delivery"]
+        },
+        "itemCount": {
+          "type": "number"
+        },
+        "subtotal": {
+          "type": "number"
+        },
+        "discount": {
+          "type": "number"
+        },
+        "discountPercent": {
+          "type": "number"
+        },
+        "taxRate": {
+          "type": "number"
+        },
+        "taxAmount": {
+          "type": "number"
+        },
+        "serviceChargeRate": {
+          "type": "number"
+        },
+        "serviceChargeAmount": {
+          "type": "number"
+        },
+        "total": {
+          "type": "number"
+        },
+        "paymentMethod": {
+          "type": "string",
+          "enum": ["cash", "qris", "transfer", "debit", "credit"]
+        },
+        "amountPaid": {
+          "type": "number"
+        },
+        "change": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["completed", "cancelled", "refunded"]
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "cashierUid",
+        "staffUids",
+        "orderNumber",
+        "timestamp",
+        "cashierName",
+        "orderType",
+        "itemCount",
+        "subtotal",
+        "discount",
+        "taxRate",
+        "taxAmount",
+        "serviceChargeRate",
+        "serviceChargeAmount",
+        "total",
+        "paymentMethod",
+        "amountPaid",
+        "change",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "OrderLineItemDoc": {
+      "title": "OrderLineItemDoc",
+      "description": "Line item belonging to a parent POS order.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "orderId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "cashierUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "productId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "productName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "productCategory": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "productSku": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "unitPrice": {
+          "type": "number"
+        },
+        "costPrice": {
+          "type": "number"
+        },
+        "quantity": {
+          "type": "number"
+        },
+        "discount": {
+          "type": "number"
+        },
+        "lineTotal": {
+          "type": "number"
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "orderId",
+        "ownerUid",
+        "cashierUid",
+        "productId",
+        "productName",
+        "productCategory",
+        "productSku",
+        "unitPrice",
+        "costPrice",
+        "quantity",
+        "discount",
+        "lineTotal",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminMember" },
+      "description": "Authorized admin/owner directory for RBAC verification"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "PII-protected user profile documents"
+    },
+    "/stores/{storeId}": {
+      "schema": { "$ref": "#/entities/StoreProfileDoc" },
+      "description": "Store identity, tax settings, and QRIS merchant profile"
+    },
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/ProductDoc" },
+      "description": "POS product inventory catalog"
+    },
+    "/posOrders/{orderId}": {
+      "schema": { "$ref": "#/entities/PosOrderDoc" },
+      "description": "POS transaction headers"
+    },
+    "/posOrders/{orderId}/items/{itemId}": {
+      "schema": { "$ref": "#/entities/OrderLineItemDoc" },
+      "description": "Line items for a specific POS transaction"
+    }
+  }
+}

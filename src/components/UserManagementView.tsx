@@ -7,16 +7,15 @@ import React, { useState } from 'react';
 import {
   AlertCircle,
   Edit2,
-  KeyRound,
+  Info,
   Mail,
   Phone,
   Search,
   Shield,
-  Trash2,
-  UserPlus,
   Users,
   X,
 } from 'lucide-react';
+import { updateManagedUserRoleOrStatus } from '../lib/firestoreSync';
 import { AppUser, UserRole } from '../types/pos';
 import { sounds } from '../utils/soundEffects';
 
@@ -24,95 +23,90 @@ interface UserManagementViewProps {
   users: AppUser[];
   setUsers: React.Dispatch<React.SetStateAction<AppUser[]>>;
   currentUser: AppUser;
+  isBootstrapAdmin: boolean;
 }
 
 export const UserManagementView: React.FC<UserManagementViewProps> = ({
   users,
   setUsers,
   currentUser,
+  isBootstrapAdmin,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | 'master' | 'cashier'>('all');
 
-  // Modal State
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  // Edit Modal State
   const [editingUser, setEditingUser] = useState<AppUser | null>(null);
-
-  // Form Fields
   const [formName, setFormName] = useState('');
-  const [formEmail, setFormEmail] = useState('');
-  const [formPassword, setFormPassword] = useState('');
   const [formPhone, setFormPhone] = useState('');
   const [formRole, setFormRole] = useState<UserRole>('cashier');
   const [formIsActive, setFormIsActive] = useState(true);
   const [formError, setFormError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
-  // Password reset modal
-  const [passwordModalUser, setPasswordModalUser] = useState<AppUser | null>(null);
-  const [newPassword, setNewPassword] = useState('');
+  const [notification, setNotification] = useState<{
+    type: 'warning' | 'success';
+    text: string;
+  } | null>(null);
 
-  // Delete confirmation modal & banner notification
-  const [userToDelete, setUserToDelete] = useState<AppUser | null>(null);
-  const [notification, setNotification] = useState<string | null>(null);
-
-  const openAddModal = () => {
-    setEditingUser(null);
-    setFormName('');
-    setFormEmail('');
-    setFormPassword('');
-    setFormPhone('');
-    setFormRole('cashier');
-    setFormIsActive(true);
-    setFormError(null);
-    setIsModalOpen(true);
+  const showBanner = (type: 'warning' | 'success', text: string) => {
+    setNotification({ type, text });
+    window.setTimeout(() => setNotification(null), 5000);
   };
 
   const openEditModal = (user: AppUser) => {
     setEditingUser(user);
     setFormName(user.name);
-    setFormEmail(user.email);
-    setFormPassword(user.password);
     setFormPhone(user.phone || '');
     setFormRole(user.role);
     setFormIsActive(user.isActive);
     setFormError(null);
-    setIsModalOpen(true);
   };
 
-  const handleSaveUser = (e: React.FormEvent) => {
+  const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!editingUser) return;
     setFormError(null);
 
-    const trimmedName = formName.trim();
-    const trimmedEmail = formEmail.trim().toLowerCase();
-    const trimmedPass = formPassword.trim();
+    const trimmedName = formName.trim().slice(0, 100);
+    const trimmedPhone = formPhone.trim().slice(0, 32);
 
-    if (!trimmedName || !trimmedEmail || !trimmedPass) {
-      setFormError('Nama lengkap, email, dan kata sandi wajib diisi.');
+    if (!trimmedName) {
+      setFormError('Nama pengguna wajib diisi.');
       return;
     }
 
-    // Check duplicate email
-    const duplicate = users.find(
-      (u) =>
-        u.email.toLowerCase() === trimmedEmail &&
-        (!editingUser || u.id !== editingUser.id)
-    );
-    if (duplicate) {
-      setFormError(`Email ${trimmedEmail} sudah digunakan oleh pengguna lain.`);
+    if (editingUser.id === currentUser.id && !formIsActive) {
+      setFormError('Anda tidak dapat menonaktifkan akun Anda sendiri.');
       return;
     }
 
-    if (editingUser) {
-      // Prevent demoting the last master
-      if (
-        editingUser.role === 'master' &&
-        formRole !== 'master' &&
-        users.filter((u) => u.role === 'master').length <= 1
-      ) {
-        setFormError('Sistem harus memiliki setidaknya satu Akun Master.');
-        return;
-      }
+    if (
+      editingUser.role === 'master' &&
+      formRole !== 'master' &&
+      users.filter((u) => u.role === 'master').length <= 1
+    ) {
+      setFormError('Sistem harus memiliki setidaknya satu Akun Master.');
+      return;
+    }
+
+    if (editingUser.id === currentUser.id && formRole !== editingUser.role) {
+      setFormError('Anda tidak dapat menurunkan peran akun Anda sendiri.');
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      await updateManagedUserRoleOrStatus(
+        editingUser.id,
+        {
+          displayName: trimmedName,
+          phone: trimmedPhone,
+          role: formRole,
+          isActive: formIsActive,
+        },
+        currentUser.id
+      );
 
       setUsers((prev) =>
         prev.map((u) =>
@@ -120,9 +114,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
             ? {
                 ...u,
                 name: trimmedName,
-                email: trimmedEmail,
-                password: trimmedPass,
-                phone: formPhone.trim() || undefined,
+                phone: trimmedPhone || undefined,
                 role: formRole,
                 isActive: formIsActive,
               }
@@ -130,75 +122,43 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
         )
       );
       sounds.playCashRegister();
-      setIsModalOpen(false);
-    } else {
-      const newUser: AppUser = {
-        id: `usr-${Date.now()}`,
-        name: trimmedName,
-        email: trimmedEmail,
-        password: trimmedPass,
-        phone: formPhone.trim() || undefined,
-        role: formRole,
-        isActive: formIsActive,
-        createdAt: new Date().toISOString(),
-      };
-      setUsers((prev) => [...prev, newUser]);
-      sounds.playCashRegister();
-      setIsModalOpen(false);
+      setEditingUser(null);
+      showBanner('success', `Data pengguna ${trimmedName} berhasil diperbarui di database.`);
+    } catch {
+      setFormError('Gagal menyimpan perubahan ke database. Pastikan hak akses Master Anda aktif.');
+      sounds.playError();
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const handleDeleteUser = (user: AppUser) => {
+  const handleToggleActive = async (user: AppUser) => {
     if (user.id === currentUser.id) {
-      setNotification('Anda tidak dapat menghapus akun Anda sendiri yang sedang aktif digunakan.');
-      setTimeout(() => setNotification(null), 4000);
+      showBanner('warning', 'Anda tidak dapat menonaktifkan akun Anda sendiri.');
       return;
     }
 
-    if (user.role === 'master' && users.filter((u) => u.role === 'master').length <= 1) {
-      setNotification('Tidak dapat menghapus akun master terakhir dalam sistem.');
-      setTimeout(() => setNotification(null), 4000);
-      return;
-    }
-
-    setUserToDelete(user);
-  };
-
-  const confirmDeleteUser = () => {
-    if (userToDelete) {
-      setUsers((prev) => prev.filter((u) => u.id !== userToDelete.id));
+    const nextActive = !user.isActive;
+    try {
+      await updateManagedUserRoleOrStatus(
+        user.id,
+        { isActive: nextActive },
+        currentUser.id
+      );
+      setUsers((prev) =>
+        prev.map((u) => (u.id === user.id ? { ...u, isActive: nextActive } : u))
+      );
       sounds.playCashRegister();
-      setUserToDelete(null);
+      showBanner(
+        'success',
+        `Status ${user.name} diubah menjadi ${nextActive ? 'Aktif' : 'Nonaktif'}.`
+      );
+    } catch {
+      showBanner('warning', 'Gagal memperbarui status pengguna di server.');
+      sounds.playError();
     }
   };
 
-  const handleToggleActive = (user: AppUser) => {
-    if (user.id === currentUser.id) {
-      setNotification('Anda tidak dapat menonaktifkan akun Anda sendiri.');
-      setTimeout(() => setNotification(null), 4000);
-      return;
-    }
-    setUsers((prev) =>
-      prev.map((u) => (u.id === user.id ? { ...u, isActive: !u.isActive } : u))
-    );
-  };
-
-  const handleResetPassword = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!passwordModalUser || !newPassword.trim()) return;
-
-    setUsers((prev) =>
-      prev.map((u) =>
-        u.id === passwordModalUser.id ? { ...u, password: newPassword.trim() } : u
-      )
-    );
-    sounds.playCashRegister();
-    setNotification(`Kata sandi untuk ${passwordModalUser.name} berhasil diperbarui.`);
-    setPasswordModalUser(null);
-    setNewPassword('');
-  };
-
-  // Filtered users list
   const filteredUsers = users.filter((u) => {
     if (roleFilter !== 'all' && u.role !== roleFilter) return false;
     if (!searchQuery.trim()) return true;
@@ -217,11 +177,18 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
       {/* Notification Banner */}
       {notification && (
-        <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs sm:text-sm font-medium flex items-center justify-between animate-in fade-in">
-          <span>{notification}</span>
+        <div
+          className={`p-4 rounded-xl border text-xs sm:text-sm font-medium flex items-center justify-between animate-in fade-in ${
+            notification.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-amber-50 border-amber-200 text-amber-800'
+          }`}
+        >
+          <span>{notification.text}</span>
           <button
+            type="button"
             onClick={() => setNotification(null)}
-            className="text-amber-600 hover:text-amber-800 font-bold ml-2 text-xs"
+            className="font-bold ml-2 text-xs opacity-75 hover:opacity-100"
           >
             ✕
           </button>
@@ -240,20 +207,12 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
             </span>
           </div>
           <p className="text-sm text-slate-500 mt-1">
-            Tambahkan dan atur akun kasir untuk melayani transaksi tanpa izin mengubah data produk atau pengaturan.
+            Atur peran (Kasir / Master) dan status aktif staf yang telah masuk menggunakan Google Sign-In.
           </p>
         </div>
-
-        <button
-          onClick={openAddModal}
-          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm shadow-md shadow-emerald-600/20 transition-all cursor-pointer self-start sm:self-auto"
-        >
-          <UserPlus className="w-4 h-4" />
-          <span>Tambah Kasir Baru</span>
-        </button>
       </div>
 
-      {/* RBAC Info Notice Card */}
+      {/* Onboarding & Security Info Cards */}
       <div className="p-4 rounded-2xl bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="flex items-start gap-3">
           <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-xs">
@@ -261,11 +220,17 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
           </div>
           <div>
             <h4 className="text-xs font-bold text-blue-950 uppercase tracking-wider">
-              Keamanan Hak Akses Peran (RBAC)
+              Otentikasi Google & Kontrol Hak Akses (RBAC)
             </h4>
             <p className="text-xs text-blue-800 mt-0.5 leading-relaxed">
-              <strong>Akun Kasir</strong> hanya memiliki hak untuk membuka kasir, memilih produk, menerima pembayaran (Tunai, QRIS, dll), dan mencetak struk belanja. Kasir <strong>tidak diizinkan</strong> menambah/mengubah harga barang, mengubah info toko, menghapus transaksi, atau mereset data.
+              Setiap staf baru mendaftar otomatis sebagai <strong>Kasir</strong> saat pertama kali masuk dengan akun Google mereka (tanpa kata sandi lokal yang rentan bocor). Master dapat mengaktifkan, menonaktifkan, atau mengubah peran staf di sini.
             </p>
+            {!isBootstrapAdmin && (
+              <p className="text-[11px] text-indigo-800 mt-1.5 flex items-center gap-1 font-semibold">
+                <Info className="w-3.5 h-3.5 shrink-0" />
+                Daftar lengkap seluruh staf hanya ditampilkan kepada Pemilik Utama toko demi privasi PII.
+              </p>
+            )}
           </div>
         </div>
 
@@ -286,6 +251,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
           <input
             type="text"
             value={searchQuery}
+            maxLength={100}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Cari kasir berdasarkan nama, email, atau no HP..."
             className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
@@ -294,6 +260,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
 
         <div className="flex items-center gap-2">
           <button
+            type="button"
             onClick={() => setRoleFilter('all')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
               roleFilter === 'all'
@@ -304,6 +271,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
             Semua ({users.length})
           </button>
           <button
+            type="button"
             onClick={() => setRoleFilter('master')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
               roleFilter === 'master'
@@ -314,6 +282,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
             👑 Master ({users.filter((u) => u.role === 'master').length})
           </button>
           <button
+            type="button"
             onClick={() => setRoleFilter('cashier')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
               roleFilter === 'cashier'
@@ -326,7 +295,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
         </div>
       </div>
 
-      {/* Users Table / Grid */}
+      {/* Users Table */}
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
@@ -336,14 +305,13 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                 <th className="py-3.5 px-4">Peran (Role)</th>
                 <th className="py-3.5 px-4">Kontak / HP</th>
                 <th className="py-3.5 px-4">Status</th>
-                <th className="py-3.5 px-4">Password</th>
                 <th className="py-3.5 px-4 text-right sm:pr-6">Aksi</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-sm">
               {filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center text-slate-400">
+                  <td colSpan={5} className="py-12 text-center text-slate-400">
                     <Users className="w-10 h-10 mx-auto text-slate-300 mb-2" />
                     <p className="font-medium">Tidak ada data pengguna yang sesuai.</p>
                   </td>
@@ -413,9 +381,13 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                       <td className="py-4 px-4">
                         <button
                           type="button"
-                          onClick={() => handleToggleActive(user)}
+                          onClick={() => void handleToggleActive(user)}
                           disabled={isCurrent}
-                          title={isCurrent ? 'Tidak bisa menonaktifkan akun sendiri' : 'Klik untuk ubah status'}
+                          title={
+                            isCurrent
+                              ? 'Tidak bisa menonaktifkan akun sendiri'
+                              : 'Klik untuk ubah status aktif'
+                          }
                           className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold cursor-pointer disabled:cursor-not-allowed transition-all ${
                             user.isActive
                               ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
@@ -431,46 +403,17 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                         </button>
                       </td>
 
-                      {/* Password Info */}
-                      <td className="py-4 px-4 text-xs font-mono text-slate-500">
-                        <div className="flex items-center gap-2">
-                          <span>••••••••</span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPasswordModalUser(user);
-                              setNewPassword('');
-                            }}
-                            className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100"
-                            title="Ganti Password"
-                          >
-                            <KeyRound className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
-
                       {/* Actions */}
                       <td className="py-4 px-4 text-right sm:pr-6">
                         <div className="flex items-center justify-end gap-1.5">
                           <button
                             type="button"
                             onClick={() => openEditModal(user)}
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 transition-colors"
-                            title="Edit Data Kasir"
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 transition-colors cursor-pointer"
+                            title="Edit Peran & Profil Pengguna"
                           >
                             <Edit2 className="w-4 h-4" />
                           </button>
-
-                          {!isCurrent && (
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteUser(user)}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                              title="Hapus Kasir"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
                         </div>
                       </td>
                     </tr>
@@ -482,34 +425,32 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
         </div>
       </div>
 
-      {/* Add / Edit User Modal */}
-      {isModalOpen && (
+      {/* Edit User Modal */}
+      {editingUser && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden animate-scale-up">
             <div className="p-5 border-b border-slate-200 flex items-center justify-between bg-slate-50">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center">
-                  <UserPlus className="w-5 h-5" />
+                  <Shield className="w-5 h-5" />
                 </div>
                 <div>
                   <h3 className="font-bold text-slate-900 text-base">
-                    {editingUser ? 'Edit Data Pengguna' : 'Tambah Akun Kasir Baru'}
+                    Edit Peran & Profil Pengguna
                   </h3>
-                  <p className="text-xs text-slate-500">
-                    {editingUser ? 'Perbarui informasi kasir' : 'Daftarkan kasir baru untuk melayani penjualan'}
-                  </p>
+                  <p className="text-xs text-slate-500 font-mono">{editingUser.email}</p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => setIsModalOpen(false)}
+                onClick={() => setEditingUser(null)}
                 className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveUser} className="p-6 space-y-4">
+            <form onSubmit={(e) => void handleSaveUser(e)} className="p-6 space-y-4">
               {formError && (
                 <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2">
                   <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
@@ -520,45 +461,15 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
               {/* Name */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Nama Lengkap Kasir *
+                  Nama Tampilan *
                 </label>
                 <input
                   type="text"
                   value={formName}
+                  maxLength={100}
                   onChange={(e) => setFormName(e.target.value)}
-                  placeholder="Contoh: Dimas Saputra"
                   required
                   className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              {/* Email */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Alamat Email (Untuk Login) *
-                </label>
-                <input
-                  type="email"
-                  value={formEmail}
-                  onChange={(e) => setFormEmail(e.target.value)}
-                  placeholder="kasir.dimas@kopiliterasi.com"
-                  required
-                  className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
-                />
-              </div>
-
-              {/* Password */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Kata Sandi (Password) *
-                </label>
-                <input
-                  type="text"
-                  value={formPassword}
-                  onChange={(e) => setFormPassword(e.target.value)}
-                  placeholder="Minimal 6 karakter"
-                  required
-                  className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
                 />
               </div>
 
@@ -570,6 +481,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                 <input
                   type="text"
                   value={formPhone}
+                  maxLength={32}
                   onChange={(e) => setFormPhone(e.target.value)}
                   placeholder="0812-xxxx-xxxx"
                   className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
@@ -584,8 +496,9 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                 <div className="grid grid-cols-2 gap-3">
                   <button
                     type="button"
+                    disabled={editingUser.id === currentUser.id}
                     onClick={() => setFormRole('cashier')}
-                    className={`p-3 rounded-xl border text-left transition-all ${
+                    className={`p-3 rounded-xl border text-left transition-all disabled:opacity-60 ${
                       formRole === 'cashier'
                         ? 'bg-emerald-50 border-emerald-500 ring-2 ring-emerald-500/20'
                         : 'border-slate-200 hover:bg-slate-50'
@@ -596,14 +509,15 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                       <span className="font-bold text-xs text-slate-900">Kasir</span>
                     </div>
                     <p className="text-[11px] text-slate-500 mt-1">
-                      Hanya penjualan & cetak struk (tidak bisa ubah data).
+                      Hanya penjualan & cetak struk.
                     </p>
                   </button>
 
                   <button
                     type="button"
+                    disabled={editingUser.id === currentUser.id}
                     onClick={() => setFormRole('master')}
-                    className={`p-3 rounded-xl border text-left transition-all ${
+                    className={`p-3 rounded-xl border text-left transition-all disabled:opacity-60 ${
                       formRole === 'master'
                         ? 'bg-amber-50 border-amber-500 ring-2 ring-amber-500/20'
                         : 'border-slate-200 hover:bg-slate-50'
@@ -614,7 +528,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                       <span className="font-bold text-xs text-slate-900">Master</span>
                     </div>
                     <p className="text-[11px] text-slate-500 mt-1">
-                      Akses penuh kelola produk, laporan, kasir, & pengaturan.
+                      Akses penuh produk, laporan, & pengaturan.
                     </p>
                   </button>
                 </div>
@@ -625,8 +539,9 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                 <span className="text-xs font-semibold text-slate-700">Status Akun Aktif</span>
                 <button
                   type="button"
+                  disabled={editingUser.id === currentUser.id}
                   onClick={() => setFormIsActive(!formIsActive)}
-                  className={`w-11 h-6 flex items-center rounded-full p-1 transition-colors ${
+                  className={`w-11 h-6 flex items-center rounded-full p-1 transition-colors disabled:opacity-60 ${
                     formIsActive ? 'bg-emerald-600' : 'bg-slate-300'
                   }`}
                 >
@@ -642,105 +557,21 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
               <div className="pt-4 border-t border-slate-200 flex justify-end gap-3">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
+                  disabled={isSaving}
+                  onClick={() => setEditingUser(null)}
                   className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 font-semibold text-xs hover:bg-slate-50"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md shadow-emerald-600/20"
+                  disabled={isSaving}
+                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md shadow-emerald-600/20 disabled:opacity-60"
                 >
-                  {editingUser ? 'Simpan Perubahan' : 'Daftarkan Kasir'}
+                  {isSaving ? 'Menyimpan...' : 'Simpan Perubahan'}
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* Password Reset Modal */}
-      {passwordModalUser && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-sm overflow-hidden animate-scale-up">
-            <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-              <div className="flex items-center gap-2">
-                <KeyRound className="w-4 h-4 text-amber-600" />
-                <h4 className="font-bold text-slate-900 text-sm">Ganti Password Kasir</h4>
-              </div>
-              <button
-                type="button"
-                onClick={() => setPasswordModalUser(null)}
-                className="p-1 rounded text-slate-400 hover:text-slate-600"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleResetPassword} className="p-5 space-y-4">
-              <div>
-                <p className="text-xs text-slate-600 mb-2">
-                  Atur ulang kata sandi untuk akun <strong>{passwordModalUser.name}</strong> ({passwordModalUser.email}):
-                </p>
-                <input
-                  type="text"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Kata sandi baru..."
-                  required
-                  className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setPasswordModalUser(null)}
-                  className="px-3.5 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-50"
-                >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-xs"
-                >
-                  Update Password
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Delete User Confirmation Modal */}
-      {userToDelete && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-sm w-full shadow-2xl border border-slate-200 p-6 text-center space-y-4 animate-in fade-in zoom-in-95">
-            <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
-              <Trash2 className="w-6 h-6" />
-            </div>
-            <div>
-              <h3 className="text-base font-bold text-slate-900">Hapus Akun Kasir?</h3>
-              <p className="text-xs text-slate-500 mt-1">
-                Yakin ingin menghapus kasir <strong>{userToDelete.name}</strong> ({userToDelete.email})? Tindakan ini tidak dapat dibatalkan.
-              </p>
-            </div>
-            <div className="grid grid-cols-2 gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setUserToDelete(null)}
-                className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-100"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={confirmDeleteUser}
-                className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs"
-              >
-                Hapus
-              </button>
-            </div>
           </div>
         </div>
       )}

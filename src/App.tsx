@@ -83,6 +83,7 @@ export default function App() {
   const [isResolvingProfile, setIsResolvingProfile] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [syncWarning, setSyncWarning] = useState<string | null>(null);
+  const [profileRetryNonce, setProfileRetryNonce] = useState<number>(0);
 
   // Sanitized Persistent States
   const [store, setStore] = useState<StoreProfile>(() => {
@@ -385,19 +386,34 @@ export default function App() {
 
         setIsFirestoreReady(true);
       })
-      .catch(() => {
+      .catch((err) => {
         if (!active) return;
         setIsResolvingProfile(false);
-        setAuthError(
-          'Gagal memverifikasi profil pengguna dengan server. Periksa koneksi internet dan coba masuk ulang.'
-        );
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('auth/email-not-verified')) {
+          setAuthError(
+            'Email Google Anda belum terverifikasi. Gunakan akun Google dengan email terverifikasi untuk masuk.'
+          );
+        } else if (msg.includes('PERMISSION_DENIED') || msg.includes('permission-denied')) {
+          setAuthError(
+            'Akses database ditolak oleh aturan keamanan server (PERMISSION_DENIED). Coba verifikasi ulang atau hubungi Master Toko.'
+          );
+        } else if (msg.includes('unavailable') || msg.includes('offline')) {
+          setAuthError(
+            'Koneksi ke server database terganggu atau sedang offline. Periksa internet Anda lalu klik Coba Verifikasi Ulang.'
+          );
+        } else {
+          setAuthError(
+            'Gagal memverifikasi profil pengguna dengan server. Periksa koneksi internet dan coba verifikasi ulang.'
+          );
+        }
       });
 
     return () => {
       active = false;
       unsubscribers.forEach((unsub) => unsub());
     };
-  }, [authReady, firebaseUser, signOutFirebase]);
+  }, [authReady, firebaseUser, profileRetryNonce, signOutFirebase]);
 
   // Persist store edits to Firestore for authenticated Master accounts
   useEffect(() => {
@@ -699,12 +715,10 @@ export default function App() {
         store={store}
         authReady={authReady}
         isResolvingProfile={isResolvingProfile}
+        signedInEmail={firebaseUser?.email}
         externalError={authError}
         onClearExternalError={() => setAuthError(null)}
-        onLogin={(user) => {
-          setCurrentUser(user);
-          setActiveTab('pos');
-        }}
+        onRetrySync={() => setProfileRetryNonce((n) => n + 1)}
       />
     );
   }

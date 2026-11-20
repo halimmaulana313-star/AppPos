@@ -84,113 +84,150 @@ export function isBootstrapAdminUser(user: User | null): boolean {
   );
 }
 
+const inFlightProfileSyncs = new Map<string, Promise<AppUser>>();
+
 /**
  * Ensures /users/{uid} (and /admins/{uid} for verified bootstrap admin) exists cleanly.
+ * Deduplicated per UID so concurrent auth triggers never race on create/update.
  */
 export async function syncFirebaseUserProfile(firebaseUser: User): Promise<AppUser> {
-  const uid = sanitizeFirestoreId(firebaseUser.uid, 'usr');
-  const userDocRef = doc(db, 'users', uid);
-  const path = `users/${uid}`;
-  const isBootstrap = isBootstrapAdminUser(firebaseUser);
-  const email = clipString((firebaseUser.email || `${uid}@kasirku.local`).toLowerCase(), 200);
-  const displayName = clipString(
-    firebaseUser.displayName?.trim() || email.split('@')[0] || 'Pengguna KasirKu',
-    100
-  );
-  const photoURL = compactImageForFirestore(firebaseUser.photoURL, 500, false);
-
-  let existingSnap;
-  try {
-    existingSnap = await getDoc(userDocRef);
-  } catch (err) {
-    handleFirestoreError(err, OperationType.GET, path);
+  if (!firebaseUser.emailVerified) {
+    throw new Error('auth/email-not-verified');
   }
 
-  if (!existingSnap.exists()) {
-    const role: UserRole = isBootstrap ? 'master' : 'cashier';
-    const payload: Record<string, unknown> = {
-      uid,
+  const uid = sanitizeFirestoreId(firebaseUser.uid, 'usr');
+  const existingTask = inFlightProfileSyncs.get(uid);
+  if (existingTask) {
+    return existingTask;
+  }
+
+  const task = (async (): Promise<AppUser> => {
+    const userDocRef = doc(db, 'users', uid);
+    const path = `users/${uid}`;
+    const isBootstrap = isBootstrapAdminUser(firebaseUser);
+    const email = clipString((firebaseUser.email || `${uid}@kasirku.local`).toLowerCase(), 200);
+    const displayName = clipString(
+      firebaseUser.displayName?.trim() || email.split('@')[0] || 'Pengguna KasirKu',
+      100
+    );
+    const photoURL = compactImageForFirestore(firebaseUser.photoURL, 500, false);
+
+    let existingSnap;
+    try {
+      existingSnap = await getDoc(userDocRef);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, path);
+    }
+
+    if (!existingSnap.exists()) {
+      const role: UserRole = isBootstrap ? 'master' : 'cashier';
+      const payload: Record<string, unknown> = {
+        uid,
+        displayName,
+        email,
+        role,
+        isActive: true,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        lastLoginAt: serverTimestamp(),
+      };
+      if (photoURL) {
+        payload.photoURL = photoURL;
+      }
+
+      try {
+        await setDoc(userDocRef, payload);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, path);
+      }
+
+      if (isBootstrap) {
+        const adminPath = `admins/${uid}`;
+        try {
+          await setDoc(doc(db, 'admins', uid), {
+            uid,
+            email,
+            assignedBy: uid,
+            createdAt: serverTimestamp(),
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.CREATE, adminPath);
+        }
+      }
+
+      return {
+        id: uid,
+        name: displayName,
+        email,
+        role,
+        isActive: true,
+        createdAt: new Date().toISOString(),
+        lastLogin: new Date().toISOString(),
+      };
+    }
+
+    const data = existingSnap.data();
+    const existingRole: UserRole =
+      isBootstrap || data.role === 'master' ? 'master' : 'cashier';
+    const isActive = data.isActive !== false;
+
+    const updatePayload: Record<string, unknown> = {
       displayName,
-      email,
-      role,
-      isActive: true,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
       lastLoginAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
     };
     if (photoURL) {
-      payload.photoURL = photoURL;
+      updatePayload.photoURL = photoURL;
+    }
+    if (isBootstrap && data.role !== 'master') {
+      updatePayload.role = 'master';
     }
 
     try {
-      await setDoc(userDocRef, payload);
+      await updateDoc(userDocRef, updatePayload);
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, path);
+      handleFirestoreError(err, OperationType.UPDATE, path);
     }
 
     if (isBootstrap) {
       const adminPath = `admins/${uid}`;
+      const adminRef = doc(db, 'admins', uid);
       try {
-        await setDoc(doc(db, 'admins', uid), {
-          uid,
-          email,
-          assignedBy: uid,
-          createdAt: serverTimestamp(),
-        });
+        const adminSnap = await getDoc(adminRef);
+        if (!adminSnap.exists()) {
+          await setDoc(adminRef, {
+            uid,
+            email,
+            assignedBy: uid,
+            createdAt: serverTimestamp(),
+          });
+        }
       } catch (err) {
-        handleFirestoreError(err, OperationType.CREATE, adminPath);
+        handleFirestoreError(err, OperationType.WRITE, adminPath);
       }
     }
 
+    const createdAtIso =
+      data.createdAt instanceof Timestamp
+        ? data.createdAt.toDate().toISOString()
+        : new Date().toISOString();
+
     return {
       id: uid,
-      name: displayName,
-      email,
-      role,
-      isActive: true,
-      createdAt: new Date().toISOString(),
+      name: clipString(data.displayName || displayName, 100),
+      email: clipString(data.email || email, 200),
+      role: existingRole,
+      phone: optionalClipString(data.phone, 32),
+      isActive,
+      createdAt: createdAtIso,
       lastLogin: new Date().toISOString(),
     };
-  }
+  })().finally(() => {
+    inFlightProfileSyncs.delete(uid);
+  });
 
-  const data = existingSnap.data();
-  const existingRole: UserRole =
-    isBootstrap || data.role === 'master' ? 'master' : 'cashier';
-  const isActive = data.isActive !== false;
-
-  const updatePayload: Record<string, unknown> = {
-    displayName,
-    lastLoginAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  };
-  if (photoURL) {
-    updatePayload.photoURL = photoURL;
-  }
-  if (isBootstrap && data.role !== 'master') {
-    updatePayload.role = 'master';
-  }
-
-  try {
-    await updateDoc(userDocRef, updatePayload);
-  } catch (err) {
-    handleFirestoreError(err, OperationType.UPDATE, path);
-  }
-
-  const createdAtIso =
-    data.createdAt instanceof Timestamp
-      ? data.createdAt.toDate().toISOString()
-      : new Date().toISOString();
-
-  return {
-    id: uid,
-    name: clipString(data.displayName || displayName, 100),
-    email: clipString(data.email || email, 200),
-    role: existingRole,
-    phone: optionalClipString(data.phone, 32),
-    isActive,
-    createdAt: createdAtIso,
-    lastLogin: new Date().toISOString(),
-  };
+  inFlightProfileSyncs.set(uid, task);
+  return task;
 }
 
 /**

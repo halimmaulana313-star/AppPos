@@ -6,7 +6,11 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import {
   User,
+  browserLocalPersistence,
+  browserSessionPersistence,
+  inMemoryPersistence,
   onAuthStateChanged,
+  setPersistence,
   signInWithPopup,
   signOut as firebaseSignOut,
 } from 'firebase/auth';
@@ -25,6 +29,22 @@ interface FirebaseContextValue {
 }
 
 const FirebaseContext = createContext<FirebaseContextValue | undefined>(undefined);
+
+async function ensureAuthPersistence(): Promise<void> {
+  try {
+    await setPersistence(auth, browserLocalPersistence);
+  } catch {
+    try {
+      await setPersistence(auth, browserSessionPersistence);
+    } catch {
+      try {
+        await setPersistence(auth, inMemoryPersistence);
+      } catch {
+        // Ignore if environment enforces default persistence
+      }
+    }
+  }
+}
 
 export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
@@ -45,6 +65,7 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const signInWithGoogle = async (): Promise<User> => {
     setIsAuthenticating(true);
     try {
+      await ensureAuthPersistence();
       const result = await signInWithPopup(auth, googleProvider);
       return result.user;
     } finally {

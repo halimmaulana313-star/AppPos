@@ -281,9 +281,11 @@ service cloud.firestore {
     // 3. Store Profile & QRIS Configuration
     match /stores/{storeId} {
       allow get: if isSignedIn() && isValidId(storeId) && (
-        existing().ownerUid == request.auth.uid ||
-        (existing().staffUids is list && request.auth.uid in existing().staffUids) ||
-        isAdmin()
+        isAdmin() ||
+        (resource != null && (
+          existing().ownerUid == request.auth.uid ||
+          (existing().staffUids is list && request.auth.uid in existing().staffUids)
+        ))
       );
       allow list: if isSignedIn() && (
         isVerifiedBootstrapAdmin() ||
@@ -318,9 +320,11 @@ service cloud.firestore {
     // 4. Products Inventory Catalog
     match /products/{productId} {
       allow get: if isSignedIn() && isValidId(productId) && (
-        existing().ownerUid == request.auth.uid ||
-        (existing().staffUids is list && request.auth.uid in existing().staffUids) ||
-        isAdmin()
+        isAdmin() ||
+        (resource != null && (
+          existing().ownerUid == request.auth.uid ||
+          (existing().staffUids is list && request.auth.uid in existing().staffUids)
+        ))
       );
       allow list: if isSignedIn() && (
         isVerifiedBootstrapAdmin() ||
@@ -362,10 +366,12 @@ service cloud.firestore {
     // 5. POS Orders & Atomic Line Item Subcollection
     match /posOrders/{orderId} {
       allow get: if isSignedIn() && isValidId(orderId) && (
-        existing().ownerUid == request.auth.uid ||
-        existing().cashierUid == request.auth.uid ||
-        (existing().staffUids is list && request.auth.uid in existing().staffUids) ||
-        isAdmin()
+        isAdmin() ||
+        (resource != null && (
+          existing().ownerUid == request.auth.uid ||
+          existing().cashierUid == request.auth.uid ||
+          (existing().staffUids is list && request.auth.uid in existing().staffUids)
+        ))
       );
       allow list: if isSignedIn() && (
         isVerifiedBootstrapAdmin() ||
@@ -402,9 +408,14 @@ service cloud.firestore {
 
       match /items/{itemId} {
         allow get: if isSignedIn() && isValidId(orderId) && isValidId(itemId) && (
-          get(/databases/$(database)/documents/posOrders/$(orderId)).data.ownerUid == request.auth.uid ||
-          get(/databases/$(database)/documents/posOrders/$(orderId)).data.cashierUid == request.auth.uid ||
-          isAdmin()
+          isAdmin() ||
+          (
+            exists(/databases/$(database)/documents/posOrders/$(orderId)) &&
+            (
+              get(/databases/$(database)/documents/posOrders/$(orderId)).data.ownerUid == request.auth.uid ||
+              get(/databases/$(database)/documents/posOrders/$(orderId)).data.cashierUid == request.auth.uid
+            )
+          )
         );
         allow list: if isSignedIn() && (
           isVerifiedBootstrapAdmin() ||

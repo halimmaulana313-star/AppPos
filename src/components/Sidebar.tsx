@@ -7,6 +7,7 @@ import React from 'react';
 import {
   FileSpreadsheet,
   History,
+  Lock,
   Package,
   Settings,
   Shield,
@@ -51,6 +52,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: ShoppingCart,
       badge: cartCount > 0 ? `${cartCount}` : null,
       badgeColor: 'bg-emerald-500 text-white',
+    },
+    {
+      id: 'closing' as ActiveTab,
+      label: 'Tutupan Kasir',
+      sublabel: 'Tutup shift & laporan tgl',
+      icon: Lock,
+      badge: null,
     },
     {
       id: 'history' as ActiveTab,

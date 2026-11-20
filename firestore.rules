@@ -231,6 +231,55 @@ service cloud.firestore {
         data.createdAt is timestamp;
     }
 
+    function isValidCashierClosing(data) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'cashierUid', 'staffUids', 'date', 'closedAt',
+          'cashierName', 'openingCash', 'cashOut', 'systemCashSales',
+          'systemNonCashSales', 'qrisSales', 'transferSales', 'cardSales',
+          'totalSales', 'totalDiscounts', 'totalTax', 'totalServiceCharge',
+          'totalTransactions', 'totalItemsSold', 'expectedCash', 'actualCash',
+          'cashDifference', 'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'cashierUid', 'staffUids', 'date', 'closedAt',
+          'cashierName', 'shiftLabel', 'openingCash', 'cashOut', 'cashOutNote',
+          'systemCashSales', 'systemNonCashSales', 'qrisSales', 'transferSales',
+          'cardSales', 'totalSales', 'totalDiscounts', 'totalTax',
+          'totalServiceCharge', 'totalTransactions', 'totalItemsSold',
+          'expectedCash', 'actualCash', 'cashDifference', 'notes', 'status',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerUid) &&
+        isValidId(data.cashierUid) &&
+        isBoundedStaffList(data.staffUids) &&
+        data.date is string && data.date.size() == 10 && data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+        data.closedAt is string && data.closedAt.size() >= 1 && data.closedAt.size() <= 64 &&
+        data.cashierName is string && data.cashierName.size() >= 1 && data.cashierName.size() <= 100 &&
+        isOptionalString(data, 'shiftLabel', 60) &&
+        data.openingCash is number && data.openingCash >= 0 &&
+        data.cashOut is number && data.cashOut >= 0 &&
+        isOptionalString(data, 'cashOutNote', 200) &&
+        data.systemCashSales is number && data.systemCashSales >= 0 &&
+        data.systemNonCashSales is number && data.systemNonCashSales >= 0 &&
+        data.qrisSales is number && data.qrisSales >= 0 &&
+        data.transferSales is number && data.transferSales >= 0 &&
+        data.cardSales is number && data.cardSales >= 0 &&
+        data.totalSales is number && data.totalSales >= 0 &&
+        data.totalDiscounts is number && data.totalDiscounts >= 0 &&
+        data.totalTax is number && data.totalTax >= 0 &&
+        data.totalServiceCharge is number && data.totalServiceCharge >= 0 &&
+        data.totalTransactions is number && data.totalTransactions >= 0 && data.totalTransactions <= 1000000 &&
+        data.totalItemsSold is number && data.totalItemsSold >= 0 && data.totalItemsSold <= 1000000 &&
+        data.expectedCash is number &&
+        data.actualCash is number && data.actualCash >= 0 &&
+        data.cashDifference is number &&
+        isOptionalString(data, 'notes', 500) &&
+        data.status == 'closed' &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
     // =========================================================================
     // Collection Rules (Static checks precede DB reads per Denial-of-Wallet guard)
     // =========================================================================
@@ -440,6 +489,40 @@ service cloud.firestore {
         allow update: if false;
         allow delete: if isVerifiedEmail() && isValidId(orderId) && isValidId(itemId) && isAdmin();
       }
+    }
+
+    // 6. Cashier Shift / Daily Closings (Tutupan Kasir)
+    match /cashierClosings/{closingId} {
+      allow get: if isSignedIn() && isValidId(closingId) && (
+        isAdmin() ||
+        (resource != null && (
+          existing().ownerUid == request.auth.uid ||
+          existing().cashierUid == request.auth.uid ||
+          (existing().staffUids is list && request.auth.uid in existing().staffUids)
+        ))
+      );
+      allow list: if isSignedIn() && (
+        isVerifiedBootstrapAdmin() ||
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.cashierUid == request.auth.uid ||
+        request.auth.uid in resource.data.staffUids
+      );
+      allow create: if isVerifiedEmail() && isValidId(closingId) &&
+        isValidCashierClosing(incoming()) &&
+        incoming().id == closingId &&
+        incoming().cashierUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+            exists(/databases/$(database)/documents/stores/default) &&
+            incoming().ownerUid == get(/databases/$(database)/documents/stores/default).data.ownerUid
+          )
+        );
+      allow update: if false;
+      allow delete: if isVerifiedEmail() && isValidId(closingId) && isAdmin();
     }
   }
 }

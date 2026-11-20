@@ -23,6 +23,7 @@ import {
 import {
   AppUser,
   CartItem,
+  CashierClosing,
   Order,
   Product,
   StoreProfile,
@@ -910,4 +911,137 @@ export async function updateManagedUserRoleOrStatus(
       // Ignore if admin doc does not exist
     }
   }
+}
+
+export async function saveCashierClosingToFirestore(
+  closing: CashierClosing,
+  ownerUid: string,
+  cashierUid: string,
+  staffUids: string[]
+): Promise<void> {
+  const closingId = sanitizeFirestoreId(closing.id, 'CLS');
+  const safeOwnerUid = sanitizeFirestoreId(ownerUid, 'usr');
+  const safeCashierUid = sanitizeFirestoreId(cashierUid, 'usr');
+  const boundedStaff = buildStaffUids(safeOwnerUid, [safeCashierUid, ...staffUids]);
+  const path = `cashierClosings/${closingId}`;
+
+  const dateVal = /^\d{4}-\d{2}-\d{2}$/.test(closing.date)
+    ? closing.date
+    : new Date().toISOString().slice(0, 10);
+
+  const payload: Record<string, unknown> = {
+    id: closingId,
+    ownerUid: safeOwnerUid,
+    cashierUid: safeCashierUid,
+    staffUids: boundedStaff,
+    date: dateVal,
+    closedAt: clipString(closing.closedAt || new Date().toISOString(), 64),
+    cashierName: clipString(closing.cashierName || 'Kasir', 100),
+    openingCash: clampNumber(closing.openingCash, 0, 10000000000, 0),
+    cashOut: clampNumber(closing.cashOut, 0, 10000000000, 0),
+    systemCashSales: clampNumber(closing.systemCashSales, 0, 10000000000, 0),
+    systemNonCashSales: clampNumber(closing.systemNonCashSales, 0, 10000000000, 0),
+    qrisSales: clampNumber(closing.qrisSales, 0, 10000000000, 0),
+    transferSales: clampNumber(closing.transferSales, 0, 10000000000, 0),
+    cardSales: clampNumber(closing.cardSales, 0, 10000000000, 0),
+    totalSales: clampNumber(closing.totalSales, 0, 10000000000, 0),
+    totalDiscounts: clampNumber(closing.totalDiscounts, 0, 10000000000, 0),
+    totalTax: clampNumber(closing.totalTax, 0, 10000000000, 0),
+    totalServiceCharge: clampNumber(closing.totalServiceCharge, 0, 10000000000, 0),
+    totalTransactions: clampNumber(closing.totalTransactions, 0, 1000000, 0),
+    totalItemsSold: clampNumber(closing.totalItemsSold, 0, 1000000, 0),
+    expectedCash: clampNumber(closing.expectedCash, -10000000000, 10000000000, 0),
+    actualCash: clampNumber(closing.actualCash, 0, 10000000000, 0),
+    cashDifference: clampNumber(closing.cashDifference, -10000000000, 10000000000, 0),
+    status: 'closed',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  const shiftLabel = optionalClipString(closing.shiftLabel, 60);
+  const cashOutNote = optionalClipString(closing.cashOutNote, 200);
+  const notes = optionalClipString(closing.notes, 500);
+  if (shiftLabel !== undefined) payload.shiftLabel = shiftLabel;
+  if (cashOutNote !== undefined) payload.cashOutNote = cashOutNote;
+  if (notes !== undefined) payload.notes = notes;
+
+  try {
+    await setDoc(doc(db, 'cashierClosings', closingId), payload);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.CREATE, path);
+  }
+}
+
+export async function deleteCashierClosingFromFirestore(closingId: string): Promise<void> {
+  const safeId = sanitizeFirestoreId(closingId, 'CLS');
+  const path = `cashierClosings/${safeId}`;
+  try {
+    await deleteDoc(doc(db, 'cashierClosings', safeId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+  }
+}
+
+export function subscribeCashierClosings(
+  uid: string,
+  isBootstrap: boolean,
+  isMaster: boolean,
+  onClosingsData: (closings: CashierClosing[], removedClosingIds: string[]) => void
+): () => void {
+  const q = isBootstrap
+    ? collection(db, 'cashierClosings')
+    : isMaster
+      ? query(collection(db, 'cashierClosings'), where('staffUids', 'array-contains', uid))
+      : query(collection(db, 'cashierClosings'), where('cashierUid', '==', uid));
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const removedIds = snapshot
+        .docChanges()
+        .filter((change) => change.type === 'removed')
+        .map((change) => change.doc.id);
+
+      if (snapshot.empty && removedIds.length === 0) return;
+
+      const list: CashierClosing[] = snapshot.docs.map((docSnap) => {
+        const d = docSnap.data();
+        return {
+          id: d.id || docSnap.id,
+          date: d.date || new Date().toISOString().slice(0, 10),
+          closedAt: d.closedAt || new Date().toISOString(),
+          cashierUid: d.cashierUid,
+          cashierName: d.cashierName || 'Kasir',
+          shiftLabel: d.shiftLabel,
+          openingCash: Number(d.openingCash) || 0,
+          cashOut: Number(d.cashOut) || 0,
+          cashOutNote: d.cashOutNote,
+          systemCashSales: Number(d.systemCashSales) || 0,
+          systemNonCashSales: Number(d.systemNonCashSales) || 0,
+          qrisSales: Number(d.qrisSales) || 0,
+          transferSales: Number(d.transferSales) || 0,
+          cardSales: Number(d.cardSales) || 0,
+          totalSales: Number(d.totalSales) || 0,
+          totalDiscounts: Number(d.totalDiscounts) || 0,
+          totalTax: Number(d.totalTax) || 0,
+          totalServiceCharge: Number(d.totalServiceCharge) || 0,
+          totalTransactions: Number(d.totalTransactions) || 0,
+          totalItemsSold: Number(d.totalItemsSold) || 0,
+          expectedCash: Number(d.expectedCash) || 0,
+          actualCash: Number(d.actualCash) || 0,
+          cashDifference: Number(d.cashDifference) || 0,
+          notes: d.notes,
+          status: 'closed',
+        };
+      });
+
+      list.sort(
+        (a, b) => new Date(b.closedAt).getTime() - new Date(a.closedAt).getTime()
+      );
+      onClosingsData(list, removedIds);
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'cashierClosings');
+    }
+  );
 }

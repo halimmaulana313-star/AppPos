@@ -5,7 +5,9 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, LogOut, X } from 'lucide-react';
+import { CashierClosingView } from './components/CashierClosingView';
 import { CashierPOSView } from './components/CashierPOSView';
+import { ClosingReceiptModal } from './components/ClosingReceiptModal';
 import { DailyReportsView } from './components/DailyReportsView';
 import { LoginPage } from './components/LoginPage';
 import { LogoManagementView } from './components/LogoManagementView';
@@ -23,6 +25,7 @@ import {
   ActiveTab,
   AppUser,
   CartItem,
+  CashierClosing,
   DailySalesReport,
   Order,
   PaymentMethod,
@@ -43,6 +46,7 @@ import {
 import { getLocalDateString } from './utils/formatters';
 import {
   safeJsonParse,
+  sanitizeCashierClosingList,
   sanitizeOrderList,
   sanitizePrinterConfig,
   sanitizeProductList,
@@ -53,10 +57,13 @@ import { useFirebase } from './contexts/FirebaseContext';
 import { auth } from './lib/firebase';
 import {
   decrementProductsStockInFirestore,
+  deleteCashierClosingFromFirestore,
   deletePosOrderFromFirestore,
   isBootstrapAdminUser,
+  saveCashierClosingToFirestore,
   savePosOrderToFirestore,
   seedInitialStoreAndProductsIfEmpty,
+  subscribeCashierClosings,
   subscribeCurrentUserProfile,
   subscribeManagedUsers,
   subscribePosOrders,
@@ -72,6 +79,7 @@ const STORAGE_KEY_STORE = 'kasirku_store_v1';
 const STORAGE_KEY_PRODUCTS = 'kasirku_products_v1';
 const STORAGE_KEY_ORDERS = 'kasirku_orders_v1';
 const STORAGE_KEY_PRINTER = 'kasirku_printer_v1';
+const STORAGE_KEY_CLOSINGS = 'kasirku_closings_v1';
 
 export default function App() {
   const { firebaseUser, authReady, reloadAuthUser, signOutFirebase } = useFirebase();
@@ -140,6 +148,19 @@ export default function App() {
     return DEFAULT_PRINTER_CONFIG;
   });
 
+  const [cashierClosings, setCashierClosings] = useState<CashierClosing[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_CLOSINGS);
+      if (saved) {
+        const parsed = safeJsonParse<unknown>(saved);
+        if (parsed) return sanitizeCashierClosingList(parsed, []);
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  });
+
   const latestStoreRef = useRef<StoreProfile>(store);
   latestStoreRef.current = store;
   const latestProductsRef = useRef<Product[]>(products);
@@ -190,6 +211,14 @@ export default function App() {
     }
   }, [printerConfig]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_CLOSINGS, JSON.stringify(cashierClosings));
+    } catch {
+      // ignore quota errors
+    }
+  }, [cashierClosings]);
+
   // Remove legacy insecure local auth keys if present from older versions
   useEffect(() => {
     try {
@@ -203,7 +232,7 @@ export default function App() {
   // Ensure cashiers cannot access restricted management tabs
   useEffect(() => {
     if (currentUser && currentUser.role === 'cashier') {
-      if (!['pos', 'history'].includes(activeTab)) {
+      if (!['pos', 'closing', 'history'].includes(activeTab)) {
         setActiveTab('pos');
       }
     }
@@ -216,12 +245,15 @@ export default function App() {
   const [orderType, setOrderType] = useState<'dine_in' | 'takeaway' | 'delivery'>('dine_in');
   const [globalDiscountPercent, setGlobalDiscountPercent] = useState<number>(0);
 
-  // Modals
+  // Modals & Closing Navigation State
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [receiptOrder, setReceiptOrder] = useState<Order | null>(null);
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
   const [activeReport, setActiveReport] = useState<DailySalesReport | null>(null);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [activeClosingReceipt, setActiveClosingReceipt] = useState<CashierClosing | null>(null);
+  const [isClosingReceiptModalOpen, setIsClosingReceiptModalOpen] = useState(false);
+  const [closingInitialDate, setClosingInitialDate] = useState<string | undefined>(undefined);
   const [isPrinterModalOpen, setIsPrinterModalOpen] = useState(false);
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
@@ -255,6 +287,7 @@ export default function App() {
   const skipNextFirestoreProductsPushRef = useRef<boolean>(false);
   const isCompletingOrderRef = useRef<boolean>(false);
   const deletedOrderIdsRef = useRef<Set<string>>(new Set());
+  const deletedClosingIdsRef = useRef<Set<string>>(new Set());
 
   // Hydrate Firebase Auth user & attach Firestore real-time listeners when authenticated
   useEffect(() => {
@@ -373,6 +406,40 @@ export default function App() {
                 }
                 return Array.from(map.values()).sort(
                   (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+                );
+              });
+            }
+          )
+        );
+
+        unsubscribers.push(
+          subscribeCashierClosings(
+            firebaseUser.uid,
+            isBootstrap,
+            syncedUser.role === 'master',
+            (remoteClosings, removedClosingIds) => {
+              if (!active) return;
+              if (remoteClosings.length === 0 && removedClosingIds.length === 0) return;
+              const removedSet = new Set(removedClosingIds);
+              removedClosingIds.forEach((id) => deletedClosingIdsRef.current.add(id));
+              setCashierClosings((prev) => {
+                const map = new Map<string, CashierClosing>();
+                for (const rc of remoteClosings) {
+                  if (!deletedClosingIdsRef.current.has(rc.id)) {
+                    map.set(rc.id, rc);
+                  }
+                }
+                for (const lc of prev) {
+                  if (
+                    !map.has(lc.id) &&
+                    !removedSet.has(lc.id) &&
+                    !deletedClosingIdsRef.current.has(lc.id)
+                  ) {
+                    map.set(lc.id, lc);
+                  }
+                }
+                return Array.from(map.values()).sort(
+                  (a, b) => new Date(b.closedAt).getTime() - new Date(a.closedAt).getTime()
                 );
               });
             }
@@ -677,6 +744,38 @@ export default function App() {
     setOrders((prev) => prev.filter((o) => o.id !== orderId));
   };
 
+  // Save Cashier Closing (Tutupan Kasir) to Firestore & local state
+  const handleSaveCashierClosing = async (closing: CashierClosing) => {
+    if (authReady && firebaseUser) {
+      const ownerUid = firestoreOwnerUid || firebaseUser.uid;
+      await saveCashierClosingToFirestore(
+        closing,
+        ownerUid,
+        firebaseUser.uid,
+        firestoreStaffUids
+      );
+    }
+    setCashierClosings((prev) => [
+      closing,
+      ...prev.filter((c) => c.id !== closing.id),
+    ]);
+  };
+
+  // Delete Cashier Closing (Master only) with Firestore sync
+  const handleDeleteCashierClosing = async (closingId: string) => {
+    if (currentUser?.role !== 'master') return;
+    deletedClosingIdsRef.current.add(closingId);
+    if (authReady && firebaseUser) {
+      try {
+        await deleteCashierClosingFromFirestore(closingId);
+      } catch (err) {
+        deletedClosingIdsRef.current.delete(closingId);
+        throw err;
+      }
+    }
+    setCashierClosings((prev) => prev.filter((c) => c.id !== closingId));
+  };
+
   // Quick connect trigger from navbar
   const handleQuickConnect = async () => {
     if (!printerState.isSupported) {
@@ -838,9 +937,35 @@ export default function App() {
             />
           )}
 
+          {activeTab === 'closing' && (
+            <CashierClosingView
+              orders={orders}
+              closings={cashierClosings}
+              currentUser={currentUser}
+              store={store}
+              isMaster={isMaster}
+              initialDate={closingInitialDate}
+              onSaveClosing={handleSaveCashierClosing}
+              onDeleteClosing={handleDeleteCashierClosing}
+              onOpenClosingReceipt={(closing) => {
+                setActiveClosingReceipt(closing);
+                setIsClosingReceiptModalOpen(true);
+              }}
+              onSelectOrderReceipt={(order) => {
+                setReceiptOrder(order);
+                setIsReceiptModalOpen(true);
+              }}
+              onOpenReportReceiptModal={(report) => {
+                setActiveReport(report);
+                setIsReportModalOpen(true);
+              }}
+            />
+          )}
+
           {activeTab === 'reports' && isMaster && (
             <DailyReportsView
               orders={orders}
+              closings={cashierClosings}
               store={store}
               printerConfig={printerConfig}
               printerState={printerState}
@@ -854,6 +979,14 @@ export default function App() {
               onOpenReportReceiptModal={(report) => {
                 setActiveReport(report);
                 setIsReportModalOpen(true);
+              }}
+              onOpenClosingForDate={(date) => {
+                setClosingInitialDate(date);
+                setActiveTab('closing');
+              }}
+              onOpenClosingReceipt={(closing) => {
+                setActiveClosingReceipt(closing);
+                setIsClosingReceiptModalOpen(true);
               }}
             />
           )}
@@ -960,6 +1093,17 @@ export default function App() {
         report={activeReport}
         isOpen={isReportModalOpen}
         onClose={() => setIsReportModalOpen(false)}
+        store={store}
+        printerConfig={printerConfig}
+        printerState={printerState}
+        onOpenPrinterModal={() => setIsPrinterModalOpen(true)}
+      />
+
+      {/* Cashier Closing (Tutupan Kasir) Thermal Receipt Modal */}
+      <ClosingReceiptModal
+        closing={activeClosingReceipt}
+        isOpen={isClosingReceiptModalOpen}
+        onClose={() => setIsClosingReceiptModalOpen(false)}
         store={store}
         printerConfig={printerConfig}
         printerState={printerState}

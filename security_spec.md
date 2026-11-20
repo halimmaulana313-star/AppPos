@@ -9,6 +9,7 @@
 6. **Temporal Integrity & Immortality**: `createdAt` and `updatedAt` are strictly enforced against `request.time`; `createdAt`, `uid`, `ownerUid`, and `cashierUid` are immutable after creation.
 7. **Terminal State Locking**: Only `isAdmin()` may transition `posOrders` from `'completed'` to `'cancelled'` or `'refunded'`. Once `'cancelled'` or `'refunded'`, orders are strictly immutable. Non-admin staff can never mutate order status.
 8. **Payload, Stock Monotonicity & Document ID Hardening**: All document IDs match `^[a-zA-Z0-9_\-]+$` (`<= 128` chars), all string fields enforce explicit `maxLength` bounds matching `firebase-blueprint.json`, `staffUids` arrays are bounded `<= 20`, image URLs reject `javascript:`, `vbscript:`, and `data:text/html:` schemes, and cashier product stock updates are strictly monotonic non-increasing (`0 <= incoming.stock <= existing.stock`).
+9. **Cashier Closing Audit Immutability**: `/cashierClosings/{closingId}` records enforce `cashierUid == request.auth.uid`, valid `YYYY-MM-DD` date strings, `status == 'closed'`, and `createdAt == request.time`. Once recorded, closings are immutable (`allow update: if false`), and only `isAdmin()` may delete an erroneous closing record.
 
 ## 2. The "Dirty Dozen" Attack Payloads (Must All Return PERMISSION_DENIED)
 

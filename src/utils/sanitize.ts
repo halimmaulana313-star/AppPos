@@ -5,6 +5,7 @@
 
 import {
   CartItem,
+  CashierClosing,
   Order,
   PaymentMethod,
   PrinterConfig,
@@ -316,4 +317,82 @@ export function sanitizePrinterConfig(
         ? Math.round(clampFinite(d.customCharPerLine, 20, 80, 32))
         : undefined,
   };
+}
+
+const DATE_YYYY_MM_DD_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+export function sanitizeCashierClosing(raw: unknown): CashierClosing | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const d = raw as Record<string, unknown>;
+  const id = clipText(d.id, 128).replace(/[^a-zA-Z0-9_\-]/g, '-');
+  if (!id) return null;
+
+  const dateRaw = typeof d.date === 'string' ? d.date.trim() : '';
+  const date = DATE_YYYY_MM_DD_REGEX.test(dateRaw)
+    ? dateRaw
+    : new Date().toISOString().slice(0, 10);
+
+  const closedAtRaw = typeof d.closedAt === 'string' ? d.closedAt : '';
+  const closedAt =
+    closedAtRaw && !Number.isNaN(new Date(closedAtRaw).getTime())
+      ? closedAtRaw.slice(0, 64)
+      : new Date().toISOString();
+
+  const openingCash = Math.round(clampFinite(d.openingCash, 0, 10_000_000_000, 0));
+  const cashOut = Math.round(clampFinite(d.cashOut, 0, 10_000_000_000, 0));
+  const systemCashSales = Math.round(clampFinite(d.systemCashSales, 0, 10_000_000_000, 0));
+  const systemNonCashSales = Math.round(clampFinite(d.systemNonCashSales, 0, 10_000_000_000, 0));
+  const expectedCash = Math.round(
+    clampFinite(
+      d.expectedCash,
+      -10_000_000_000,
+      10_000_000_000,
+      openingCash + systemCashSales - cashOut
+    )
+  );
+  const actualCash = Math.round(clampFinite(d.actualCash, 0, 10_000_000_000, 0));
+  const cashDifference = Math.round(
+    clampFinite(d.cashDifference, -10_000_000_000, 10_000_000_000, actualCash - expectedCash)
+  );
+
+  return {
+    id,
+    date,
+    closedAt,
+    cashierUid: clipOptionalText(d.cashierUid, 128),
+    cashierName: clipText(d.cashierName, 100, 'Kasir'),
+    shiftLabel: clipOptionalText(d.shiftLabel, 60),
+    openingCash,
+    cashOut,
+    cashOutNote: clipOptionalText(d.cashOutNote, 200),
+    systemCashSales,
+    systemNonCashSales,
+    qrisSales: Math.round(clampFinite(d.qrisSales, 0, 10_000_000_000, 0)),
+    transferSales: Math.round(clampFinite(d.transferSales, 0, 10_000_000_000, 0)),
+    cardSales: Math.round(clampFinite(d.cardSales, 0, 10_000_000_000, 0)),
+    totalSales: Math.round(clampFinite(d.totalSales, 0, 10_000_000_000, 0)),
+    totalDiscounts: Math.round(clampFinite(d.totalDiscounts, 0, 10_000_000_000, 0)),
+    totalTax: Math.round(clampFinite(d.totalTax, 0, 10_000_000_000, 0)),
+    totalServiceCharge: Math.round(clampFinite(d.totalServiceCharge, 0, 10_000_000_000, 0)),
+    totalTransactions: Math.floor(clampFinite(d.totalTransactions, 0, 1_000_000, 0)),
+    totalItemsSold: Math.floor(clampFinite(d.totalItemsSold, 0, 1_000_000, 0)),
+    expectedCash,
+    actualCash,
+    cashDifference,
+    notes: clipOptionalText(d.notes, 500),
+    status: 'closed',
+  };
+}
+
+export function sanitizeCashierClosingList(
+  raw: unknown,
+  fallback: CashierClosing[] = []
+): CashierClosing[] {
+  if (!Array.isArray(raw)) return fallback;
+  const out: CashierClosing[] = [];
+  for (let i = 0; i < raw.length && i < 1000; i++) {
+    const item = sanitizeCashierClosing(raw[i]);
+    if (item) out.push(item);
+  }
+  return out;
 }

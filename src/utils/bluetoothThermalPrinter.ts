@@ -3,7 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { DailySalesReport, Order, PrinterConfig, StoreProfile } from '../types/pos';
+import {
+  CashierClosing,
+  DailySalesReport,
+  Order,
+  PrinterConfig,
+  StoreProfile,
+} from '../types/pos';
 import {
   centerText,
   createSeparator,
@@ -469,6 +475,88 @@ class BluetoothThermalPrinterManager {
     builder.feedLines(3);
     builder.line('( .............................. )');
     builder.line('Kasir / Supervisor Toko');
+
+    builder.feedLines(3);
+    if (config.autoCutPaper) {
+      builder.cutPaper();
+    }
+
+    return builder.getBytes();
+  }
+
+  /**
+   * Generate raw ESC/POS bytes for Cashier Closing (Tutupan Kasir)
+   */
+  generateCashierClosingBytes(
+    closing: CashierClosing,
+    store: StoreProfile,
+    config: PrinterConfig
+  ): Uint8Array {
+    const maxChars = getLineCharLimit(config.paperWidth);
+    const builder = new EscPosBuilder();
+
+    builder.init();
+    builder.alignCenter();
+    builder.bold(true);
+    builder.doubleHeight(true);
+    builder.line('STRUK TUTUPAN KASIR');
+    builder.doubleHeight(false);
+    builder.line(store.storeName.toUpperCase());
+    builder.bold(false);
+    builder.line(createSeparator('=', maxChars));
+
+    builder.alignLeft();
+    builder.line(justifyLine('No. Tutupan', `#${closing.id}`, maxChars));
+    builder.line(justifyLine('Tanggal Laporan', formatDateOnly(closing.date), maxChars));
+    builder.line(justifyLine('Waktu Tutup', formatDateTime(closing.closedAt), maxChars));
+    builder.line(justifyLine('Kasir', closing.cashierName, maxChars));
+    if (closing.shiftLabel) {
+      builder.line(justifyLine('Shift', closing.shiftLabel, maxChars));
+    }
+    builder.line(createSeparator('-', maxChars));
+
+    builder.bold(true);
+    builder.line('RINGKASAN PENJUALAN');
+    builder.bold(false);
+    builder.line(justifyLine('Total Transaksi', `${closing.totalTransactions} Trx`, maxChars));
+    builder.line(justifyLine('Item Terjual', `${closing.totalItemsSold} Pcs`, maxChars));
+    builder.line(justifyLine('Total Diskon', formatRupiah(closing.totalDiscounts), maxChars));
+    builder.line(justifyLine('Total Omset', formatRupiah(closing.totalSales), maxChars));
+    builder.line(justifyLine('Non-Tunai (QRIS/TF/Card)', formatRupiah(closing.systemNonCashSales), maxChars));
+    builder.line(createSeparator('-', maxChars));
+
+    builder.bold(true);
+    builder.line('REKONSILIASI KAS LACI');
+    builder.bold(false);
+    builder.line(justifyLine('Modal Awal Laci', formatRupiah(closing.openingCash), maxChars));
+    builder.line(justifyLine('Penjualan Tunai', formatRupiah(closing.systemCashSales), maxChars));
+    builder.line(justifyLine('Kas Keluar', `-${formatRupiah(closing.cashOut)}`, maxChars));
+    if (closing.cashOutNote) {
+      builder.line(`  Ket: ${closing.cashOutNote}`);
+    }
+    builder.line(createSeparator('-', maxChars));
+    builder.bold(true);
+    builder.line(justifyLine('Kas Seharusnya', formatRupiah(closing.expectedCash), maxChars));
+    builder.line(justifyLine('Kas Fisik Laci', formatRupiah(closing.actualCash), maxChars));
+    const diffLabel =
+      closing.cashDifference === 0
+        ? 'Pas (Rp 0)'
+        : closing.cashDifference > 0
+          ? `+${formatRupiah(closing.cashDifference)}`
+          : `-${formatRupiah(Math.abs(closing.cashDifference))}`;
+    builder.line(justifyLine('Selisih Kas', diffLabel, maxChars));
+    builder.bold(false);
+
+    if (closing.notes) {
+      builder.line(createSeparator('-', maxChars));
+      builder.line(`Catatan: ${closing.notes}`);
+    }
+
+    builder.line(createSeparator('=', maxChars));
+    builder.alignCenter();
+    builder.line('Tanda Tangan Kasir & Owner');
+    builder.feedLines(3);
+    builder.line('( .............. )   ( .............. )');
 
     builder.feedLines(3);
     if (config.autoCutPaper) {

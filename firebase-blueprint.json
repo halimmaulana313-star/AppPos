@@ -514,6 +514,151 @@
         "lineTotal",
         "createdAt"
       ]
+    },
+    "CashierClosingDoc": {
+      "title": "CashierClosingDoc",
+      "description": "End-of-shift or daily cashier cash drawer closing and daily report snapshot.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "cashierUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "staffUids": {
+          "type": "array",
+          "description": "Bounded list (max 20) of authorized staff UIDs"
+        },
+        "date": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "closedAt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "cashierName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "shiftLabel": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "openingCash": {
+          "type": "number"
+        },
+        "cashOut": {
+          "type": "number"
+        },
+        "cashOutNote": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "systemCashSales": {
+          "type": "number"
+        },
+        "systemNonCashSales": {
+          "type": "number"
+        },
+        "qrisSales": {
+          "type": "number"
+        },
+        "transferSales": {
+          "type": "number"
+        },
+        "cardSales": {
+          "type": "number"
+        },
+        "totalSales": {
+          "type": "number"
+        },
+        "totalDiscounts": {
+          "type": "number"
+        },
+        "totalTax": {
+          "type": "number"
+        },
+        "totalServiceCharge": {
+          "type": "number"
+        },
+        "totalTransactions": {
+          "type": "number"
+        },
+        "totalItemsSold": {
+          "type": "number"
+        },
+        "expectedCash": {
+          "type": "number"
+        },
+        "actualCash": {
+          "type": "number"
+        },
+        "cashDifference": {
+          "type": "number"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "status": {
+          "type": "string",
+          "enum": ["closed"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "cashierUid",
+        "staffUids",
+        "date",
+        "closedAt",
+        "cashierName",
+        "openingCash",
+        "cashOut",
+        "systemCashSales",
+        "systemNonCashSales",
+        "qrisSales",
+        "transferSales",
+        "cardSales",
+        "totalSales",
+        "totalDiscounts",
+        "totalTax",
+        "totalServiceCharge",
+        "totalTransactions",
+        "totalItemsSold",
+        "expectedCash",
+        "actualCash",
+        "cashDifference",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -540,6 +685,10 @@
     "/posOrders/{orderId}/items/{itemId}": {
       "schema": { "$ref": "#/entities/OrderLineItemDoc" },
       "description": "Line items for a specific POS transaction"
+    },
+    "/cashierClosings/{closingId}": {
+      "schema": { "$ref": "#/entities/CashierClosingDoc" },
+      "description": "End-of-shift and daily cashier closing reconciliation records"
     }
   }
 }

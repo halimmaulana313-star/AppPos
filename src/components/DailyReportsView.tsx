@@ -18,6 +18,7 @@ import {
   Eye,
   FileSpreadsheet,
   Flame,
+  Lock,
   Moon,
   Package,
   Printer,
@@ -32,7 +33,13 @@ import {
   TrendingUp,
   Wallet,
 } from 'lucide-react';
-import { DailySalesReport, Order, PrinterConfig, StoreProfile } from '../types/pos';
+import {
+  CashierClosing,
+  DailySalesReport,
+  Order,
+  PrinterConfig,
+  StoreProfile,
+} from '../types/pos';
 import { bluetoothPrinter, BluetoothPrinterState } from '../utils/bluetoothThermalPrinter';
 import {
   formatDateOnly,
@@ -50,6 +57,7 @@ import { sounds } from '../utils/soundEffects';
 
 interface DailyReportsViewProps {
   orders: Order[];
+  closings?: CashierClosing[];
   store: StoreProfile;
   printerConfig: PrinterConfig;
   printerState: BluetoothPrinterState;
@@ -58,10 +66,13 @@ interface DailyReportsViewProps {
   onOpenPrinterModal: () => void;
   onSelectOrderReceipt: (order: Order) => void;
   onOpenReportReceiptModal: (report: DailySalesReport) => void;
+  onOpenClosingForDate?: (date: string) => void;
+  onOpenClosingReceipt?: (closing: CashierClosing) => void;
 }
 
 export const DailyReportsView: React.FC<DailyReportsViewProps> = ({
   orders,
+  closings = [],
   store,
   printerConfig,
   printerState,
@@ -70,6 +81,8 @@ export const DailyReportsView: React.FC<DailyReportsViewProps> = ({
   onOpenPrinterModal,
   onSelectOrderReceipt,
   onOpenReportReceiptModal,
+  onOpenClosingForDate,
+  onOpenClosingReceipt,
 }) => {
   // Date selection state
   const todayStr = useMemo(() => {
@@ -97,6 +110,10 @@ export const DailyReportsView: React.FC<DailyReportsViewProps> = ({
   const report = useMemo(() => {
     return calculateDailyReport(orders, selectedDate);
   }, [orders, selectedDate]);
+
+  const closingsForDate = useMemo(() => {
+    return closings.filter((c) => c.date === selectedDate);
+  }, [closings, selectedDate]);
 
   // Hourly insights and peak hour calculation
   const hourlyInsights = useMemo(() => {
@@ -336,6 +353,81 @@ export const DailyReportsView: React.FC<DailyReportsViewProps> = ({
           )}
         </div>
       )}
+
+      {/* Cashier Closing Status for Selected Date */}
+      <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-start sm:items-center gap-3">
+          <div
+            className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+              closingsForDate.length > 0
+                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                : 'bg-amber-50 text-amber-700 border border-amber-200'
+            }`}
+          >
+            <Lock className="w-5 h-5" />
+          </div>
+          <div>
+            {closingsForDate.length > 0 ? (
+              <>
+                <div className="font-bold text-sm text-slate-900">
+                  Tutupan Kasir Tanggal {formatDateOnly(selectedDate)} Sudah Tercatat (
+                  {closingsForDate.length} shift)
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5 tabular-nums">
+                  Terakhir oleh <strong>{closingsForDate[0].cashierName}</strong> ·{' '}
+                  {closingsForDate[0].shiftLabel || 'Full Day'} · Kas Fisik{' '}
+                  <strong>{formatRupiah(closingsForDate[0].actualCash)}</strong> · Selisih{' '}
+                  <strong
+                    className={
+                      closingsForDate[0].cashDifference === 0
+                        ? 'text-emerald-700'
+                        : closingsForDate[0].cashDifference > 0
+                          ? 'text-blue-700'
+                          : 'text-rose-700'
+                    }
+                  >
+                    {closingsForDate[0].cashDifference === 0
+                      ? 'Pas (Rp 0)'
+                      : closingsForDate[0].cashDifference > 0
+                        ? `+${formatRupiah(closingsForDate[0].cashDifference)}`
+                        : `-${formatRupiah(Math.abs(closingsForDate[0].cashDifference))}`}
+                  </strong>
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="font-bold text-sm text-slate-900">
+                  Belum Ada Tutupan Kasir untuk {formatDateOnly(selectedDate)}
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Lakukan hitung uang laci &amp; simpan tutupan kasir untuk mengarsipkan rekonsiliasi tanggal ini.
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {closingsForDate.length > 0 && onOpenClosingReceipt && (
+            <button
+              type="button"
+              onClick={() => onOpenClosingReceipt(closingsForDate[0])}
+              className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap"
+            >
+              Struk Tutupan
+            </button>
+          )}
+          {onOpenClosingForDate && (
+            <button
+              type="button"
+              onClick={() => onOpenClosingForDate(selectedDate)}
+              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors cursor-pointer whitespace-nowrap"
+            >
+              {closingsForDate.length > 0 ? 'Buka Tutupan Kasir' : 'Tutup Kasir Tanggal Ini'}
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* Action Bar: Direct Bluetooth Print & Exports */}
       <div className="bg-emerald-900 text-white rounded-2xl p-4 sm:p-5 shadow-md flex flex-col md:flex-row items-center justify-between gap-4">

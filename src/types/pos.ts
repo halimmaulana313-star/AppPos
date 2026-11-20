@@ -131,4 +131,40 @@ export interface AppUser {
   lastLogin?: string;
 }
 
-export type ActiveTab = 'pos' | 'reports' | 'history' | 'products' | 'users' | 'settings' | 'logo';
+export interface CashierClosing {
+  id: string;
+  date: string; // YYYY-MM-DD
+  closedAt: string; // ISO string
+  cashierUid?: string;
+  cashierName: string;
+  shiftLabel?: string;
+  openingCash: number;
+  cashOut: number;
+  cashOutNote?: string;
+  systemCashSales: number;
+  systemNonCashSales: number;
+  qrisSales: number;
+  transferSales: number;
+  cardSales: number;
+  totalSales: number;
+  totalDiscounts: number;
+  totalTax: number;
+  totalServiceCharge: number;
+  totalTransactions: number;
+  totalItemsSold: number;
+  expectedCash: number;
+  actualCash: number;
+  cashDifference: number;
+  notes?: string;
+  status: 'closed';
+}
+
+export type ActiveTab =
+  | 'pos'
+  | 'closing'
+  | 'reports'
+  | 'history'
+  | 'products'
+  | 'users'
+  | 'settings'
+  | 'logo';

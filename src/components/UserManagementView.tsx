@@ -6,16 +6,27 @@
 import React, { useState } from 'react';
 import {
   AlertCircle,
+  Check,
+  CheckCircle2,
+  Copy,
   Edit2,
+  Eye,
+  EyeOff,
   Info,
+  Lock,
   Mail,
   Phone,
+  RefreshCw,
   Search,
   Shield,
+  UserPlus,
   Users,
   X,
 } from 'lucide-react';
-import { updateManagedUserRoleOrStatus } from '../lib/firestoreSync';
+import {
+  registerStaffAccountByMaster,
+  updateManagedUserRoleOrStatus,
+} from '../lib/firestoreSync';
 import { AppUser, UserRole } from '../types/pos';
 import { sounds } from '../utils/soundEffects';
 
@@ -24,6 +35,52 @@ interface UserManagementViewProps {
   setUsers: React.Dispatch<React.SetStateAction<AppUser[]>>;
   currentUser: AppUser;
   isBootstrapAdmin: boolean;
+  onStaffRegistered?: (user: AppUser) => void;
+}
+
+function generateTemporaryPassword(length = 10): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  const array = new Uint32Array(length);
+  if (typeof window !== 'undefined' && window.crypto?.getRandomValues) {
+    window.crypto.getRandomValues(array);
+  } else {
+    for (let i = 0; i < length; i++) {
+      array[i] = Math.floor(Math.random() * chars.length);
+    }
+  }
+  return Array.from(array, (n) => chars[n % chars.length]).join('');
+}
+
+function mapStaffRegistrationError(err: unknown): string {
+  const code = (err as { code?: string })?.code || '';
+  const msg = err instanceof Error ? err.message : String(err);
+  const combined = `${code} ${msg}`;
+
+  if (combined.includes('validation/name-required')) {
+    return 'Nama lengkap kasir wajib diisi.';
+  }
+  if (combined.includes('auth/invalid-email')) {
+    return 'Format alamat email tidak valid.';
+  }
+  if (combined.includes('auth/weak-password')) {
+    return 'Password awal terlalu lemah (minimal 6 karakter).';
+  }
+  if (combined.includes('auth/email-already-in-use')) {
+    return 'Email ini sudah terdaftar di Firebase. Jika kasir belum muncul, minta kasir masuk sekali di halaman login atau gunakan email lain.';
+  }
+  if (combined.includes('auth/operation-not-allowed')) {
+    return 'Metode login Email/Password belum aktif di Firebase Console (Authentication → Sign-in method → Email/Password). Aktifkan terlebih dahulu atau minta kasir login dengan Google.';
+  }
+  if (combined.includes('auth/network-request-failed')) {
+    return 'Koneksi internet terganggu. Periksa jaringan Anda lalu coba lagi.';
+  }
+  if (combined.includes('auth/too-many-requests')) {
+    return 'Terlalu banyak percobaan pendaftaran. Tunggu beberapa saat lalu coba lagi.';
+  }
+  if (combined.includes('PERMISSION_DENIED') || combined.includes('permission-denied')) {
+    return 'Akses ditolak oleh aturan keamanan Firestore. Pastikan akun Master Anda terverifikasi.';
+  }
+  return 'Gagal mendaftarkan akun kasir. Periksa data isian dan koneksi internet Anda.';
 }
 
 export const UserManagementView: React.FC<UserManagementViewProps> = ({
@@ -31,9 +88,31 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
   setUsers,
   currentUser,
   isBootstrapAdmin,
+  onStaffRegistered,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | 'master' | 'cashier'>('all');
+
+  // Create Staff Modal State
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [addName, setAddName] = useState('');
+  const [addEmail, setAddEmail] = useState('');
+  const [addPassword, setAddPassword] = useState('');
+  const [showAddPassword, setShowAddPassword] = useState(false);
+  const [addPhone, setAddPhone] = useState('');
+  const [addRole, setAddRole] = useState<UserRole>('cashier');
+  const [addError, setAddError] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+
+  // Ephemeral in-memory credential summary right after creation (cleared on close)
+  const [createdCredentials, setCreatedCredentials] = useState<{
+    name: string;
+    email: string;
+    password: string;
+    role: UserRole;
+    verificationEmailSent: boolean;
+  } | null>(null);
+  const [copiedCreds, setCopiedCreds] = useState(false);
 
   // Edit Modal State
   const [editingUser, setEditingUser] = useState<AppUser | null>(null);
@@ -52,6 +131,109 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
   const showBanner = (type: 'warning' | 'success', text: string) => {
     setNotification({ type, text });
     window.setTimeout(() => setNotification(null), 5000);
+  };
+
+  const openAddModal = () => {
+    setAddName('');
+    setAddEmail('');
+    setAddPassword('');
+    setShowAddPassword(false);
+    setAddPhone('');
+    setAddRole('cashier');
+    setAddError(null);
+    setIsAddModalOpen(true);
+  };
+
+  const closeAddModal = () => {
+    if (isCreating) return;
+    setIsAddModalOpen(false);
+    setAddPassword('');
+    setAddError(null);
+  };
+
+  const handleCreateStaff = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAddError(null);
+
+    const trimmedName = addName.trim().slice(0, 100);
+    const trimmedEmail = addEmail.trim().toLowerCase().slice(0, 200);
+    const trimmedPhone = addPhone.trim().slice(0, 32);
+
+    if (!trimmedName) {
+      setAddError('Nama lengkap kasir wajib diisi.');
+      return;
+    }
+    if (!trimmedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      setAddError('Masukkan alamat email yang valid.');
+      return;
+    }
+    if (!addPassword || addPassword.length < 6) {
+      setAddError('Password awal minimal 6 karakter.');
+      return;
+    }
+    if (users.some((u) => u.email.toLowerCase() === trimmedEmail)) {
+      setAddError('Email tersebut sudah terdaftar dalam daftar pengguna toko.');
+      return;
+    }
+
+    setIsCreating(true);
+    try {
+      const result = await registerStaffAccountByMaster({
+        displayName: trimmedName,
+        email: trimmedEmail,
+        password: addPassword,
+        phone: trimmedPhone || undefined,
+        role: addRole,
+        adminUid: currentUser.id,
+      });
+
+      if (onStaffRegistered) {
+        onStaffRegistered(result.user);
+      } else {
+        setUsers((prev) =>
+          prev.some((u) => u.id === result.user.id) ? prev : [...prev, result.user]
+        );
+      }
+
+      setCreatedCredentials({
+        name: result.user.name,
+        email: result.user.email,
+        password: addPassword,
+        role: result.user.role,
+        verificationEmailSent: result.verificationEmailSent,
+      });
+      setCopiedCreds(false);
+      setAddPassword('');
+      setIsAddModalOpen(false);
+      sounds.playCashRegister();
+      showBanner(
+        'success',
+        `Akun ${result.user.role === 'master' ? 'Master' : 'Kasir'} ${result.user.name} berhasil didaftarkan tanpa mengeluarkan sesi Anda.`
+      );
+    } catch (err) {
+      setAddError(mapStaffRegistrationError(err));
+      sounds.playError();
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  const handleCopyCredentials = async () => {
+    if (!createdCredentials) return;
+    const text = [
+      `Akun KasirKu (${createdCredentials.role === 'master' ? 'Master' : 'Kasir'})`,
+      `Nama: ${createdCredentials.name}`,
+      `Email: ${createdCredentials.email}`,
+      `Password Awal: ${createdCredentials.password}`,
+      'Catatan: Klik link verifikasi di email terlebih dahulu sebelum login dengan Email & Password.',
+    ].join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedCreds(true);
+      window.setTimeout(() => setCopiedCreds(false), 2500);
+    } catch {
+      // Clipboard blocked in some contexts; ignore
+    }
   };
 
   const openEditModal = (user: AppUser) => {
@@ -195,10 +377,72 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
         </div>
       )}
 
+      {/* Newly Created Staff Credentials Banner (Session-Only Memory) */}
+      {createdCredentials && (
+        <div className="p-4 sm:p-5 rounded-2xl bg-emerald-50 border border-emerald-200 shadow-xs space-y-3 animate-in fade-in">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-emerald-950">
+                  Akun {createdCredentials.role === 'master' ? 'Master' : 'Kasir'} Siap Digunakan:{' '}
+                  {createdCredentials.name}
+                </h4>
+                <p className="text-xs text-emerald-800 mt-0.5 leading-relaxed">
+                  {createdCredentials.verificationEmailSent
+                    ? `Email verifikasi telah dikirim ke ${createdCredentials.email}. Minta staf mengklik link verifikasi di inbox/spam sebelum login dengan Email & Password.`
+                    : `Akun dibuat. Minta staf menekan "Kirim Ulang Email Verifikasi" di layar login saat pertama kali masuk dengan Email & Password.`}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCreatedCredentials(null)}
+              className="p-1.5 rounded-lg text-emerald-700 hover:bg-emerald-100 shrink-0"
+              title="Tutup Ringkasan"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white rounded-xl border border-emerald-200 px-3.5 py-2.5 text-xs">
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-1 font-mono text-slate-800">
+              <span>
+                <strong className="text-slate-500 font-sans">Email:</strong>{' '}
+                {createdCredentials.email}
+              </span>
+              <span>
+                <strong className="text-slate-500 font-sans">Password Awal:</strong>{' '}
+                {createdCredentials.password}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleCopyCredentials()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              {copiedCreds ? (
+                <>
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Tersalin</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Salin Info Login</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">
               Kelola Pengguna & Kasir
             </h1>
@@ -207,9 +451,18 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
             </span>
           </div>
           <p className="text-sm text-slate-500 mt-1">
-            Atur peran (Kasir / Master) dan status aktif staf yang telah masuk menggunakan Email atau Google Sign-In.
+            Daftarkan akun kasir baru secara langsung atau atur peran & status aktif staf toko.
           </p>
         </div>
+
+        <button
+          type="button"
+          onClick={openAddModal}
+          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-md shadow-emerald-600/20 transition-all active:scale-[0.98] whitespace-nowrap shrink-0 cursor-pointer"
+        >
+          <UserPlus className="w-4 h-4 shrink-0" />
+          <span>Tambah Kasir</span>
+        </button>
       </div>
 
       {/* Onboarding & Security Info Cards */}
@@ -223,7 +476,8 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
               Otentikasi Firebase & Kontrol Hak Akses (RBAC)
             </h4>
             <p className="text-xs text-blue-800 mt-0.5 leading-relaxed">
-              Setiap staf baru mendaftar otomatis sebagai <strong>Kasir</strong> saat pertama kali masuk dengan email terverifikasi atau akun Google mereka. Master dapat mengaktifkan, menonaktifkan, atau mengubah peran staf di sini.
+              Master dapat mendaftarkan akun <strong>Kasir</strong> langsung melalui tombol{' '}
+              <strong>Tambah Kasir</strong> tanpa keluar dari sesi Master, atau staf dapat masuk mandiri menggunakan email terverifikasi / Google Sign-In.
             </p>
             {!isBootstrapAdmin && (
               <p className="text-[11px] text-indigo-800 mt-1.5 flex items-center gap-1 font-semibold">
@@ -569,6 +823,223 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                   className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md shadow-emerald-600/20 disabled:opacity-60"
                 >
                   {isSaving ? 'Menyimpan...' : 'Simpan Perubahan'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add / Register New Staff Modal */}
+      {isAddModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden animate-scale-up my-auto">
+            <div className="p-5 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                  <UserPlus className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-base">
+                    Daftarkan Kasir / Staf Baru
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Buat akun login baru langsung dari akun Master
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isCreating}
+                onClick={closeAddModal}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={(e) => void handleCreateStaff(e)} className="p-6 space-y-4">
+              {addError && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                  <span>{addError}</span>
+                </div>
+              )}
+
+              {/* Name */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Nama Lengkap Kasir *
+                </label>
+                <input
+                  type="text"
+                  value={addName}
+                  maxLength={100}
+                  onChange={(e) => setAddName(e.target.value)}
+                  placeholder="Contoh: Budi Santoso"
+                  required
+                  className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              {/* Email */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Email Login Kasir *
+                </label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                  <input
+                    type="email"
+                    value={addEmail}
+                    maxLength={200}
+                    onChange={(e) => setAddEmail(e.target.value)}
+                    placeholder="kasir@tokoanda.com"
+                    required
+                    autoComplete="off"
+                    className="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+              </div>
+
+              {/* Password */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Password Awal (Minimal 6 karakter) *
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddPassword(generateTemporaryPassword(10));
+                      setShowAddPassword(true);
+                    }}
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    <span>Buat Password Acak</span>
+                  </button>
+                </div>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                  <input
+                    type={showAddPassword ? 'text' : 'password'}
+                    value={addPassword}
+                    minLength={6}
+                    maxLength={128}
+                    onChange={(e) => setAddPassword(e.target.value)}
+                    placeholder="Minimal 6 karakter"
+                    required
+                    autoComplete="new-password"
+                    className="w-full pl-10 pr-10 py-2.5 bg-white border border-slate-300 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAddPassword((v) => !v)}
+                    className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 p-0.5"
+                    title={showAddPassword ? 'Sembunyikan password' : 'Tampilkan password'}
+                  >
+                    {showAddPassword ? (
+                      <EyeOff className="w-4 h-4" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Phone */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Nomor HP / WhatsApp (Opsional)
+                </label>
+                <input
+                  type="text"
+                  value={addPhone}
+                  maxLength={32}
+                  onChange={(e) => setAddPhone(e.target.value)}
+                  placeholder="0812-xxxx-xxxx"
+                  className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              {/* Role selection */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Peran Akun (Role)
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setAddRole('cashier')}
+                    className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                      addRole === 'cashier'
+                        ? 'bg-emerald-50 border-emerald-500 ring-2 ring-emerald-500/20'
+                        : 'border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">👤</span>
+                      <span className="font-bold text-xs text-slate-900">Kasir</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Penjualan POS, Tutupan Kasir & riwayat.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setAddRole('master')}
+                    className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                      addRole === 'master'
+                        ? 'bg-amber-50 border-amber-500 ring-2 ring-amber-500/20'
+                        : 'border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">👑</span>
+                      <span className="font-bold text-xs text-slate-900">Master</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Akses penuh produk, laporan & staf.
+                    </p>
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 text-[11px] text-blue-900 leading-relaxed flex items-start gap-2">
+                <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                <span>
+                  Link verifikasi email akan dikirim otomatis ke alamat email staf. Staf perlu mengklik link tersebut satu kali sebelum login menggunakan Email &amp; Password (atau bisa langsung masuk dengan Google jika memakai Gmail yang sama).
+                </span>
+              </div>
+
+              {/* Actions */}
+              <div className="pt-3 border-t border-slate-200 flex justify-end gap-3">
+                <button
+                  type="button"
+                  disabled={isCreating}
+                  onClick={closeAddModal}
+                  className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 font-semibold text-xs hover:bg-slate-50 disabled:opacity-60"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isCreating}
+                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md shadow-emerald-600/20 disabled:opacity-60 inline-flex items-center gap-2"
+                >
+                  {isCreating ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                      <span>Mendaftarkan...</span>
+                    </>
+                  ) : (
+                    <>
+                      <UserPlus className="w-4 h-4" />
+                      <span>Daftarkan Sekarang</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

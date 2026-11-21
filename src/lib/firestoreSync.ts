@@ -3,7 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { User } from 'firebase/auth';
+import { deleteApp, initializeApp } from 'firebase/app';
+import {
+  User,
+  createUserWithEmailAndPassword,
+  getAuth,
+  sendEmailVerification,
+  signOut,
+  updateProfile,
+} from 'firebase/auth';
 import {
   Timestamp,
   collection,
@@ -30,7 +38,7 @@ import {
   UserRole,
 } from '../types/pos';
 import { sanitizeSafeImageUrl } from '../utils/sanitize';
-import { OperationType, auth, db, handleFirestoreError } from './firebase';
+import { OperationType, auth, db, firebaseConfig, handleFirestoreError } from './firebase';
 
 export const BOOTSTRAP_ADMIN_EMAILS = [
   'halimmaulana133@gmail.com',
@@ -177,9 +185,13 @@ export async function syncFirebaseUserProfile(firebaseUser: User): Promise<AppUs
     const existingRole: UserRole =
       isBootstrap || data.role === 'master' ? 'master' : 'cashier';
     const isActive = data.isActive !== false;
+    const resolvedDisplayName = clipString(
+      (typeof data.displayName === 'string' && data.displayName.trim()) || displayName,
+      100
+    );
 
     const updatePayload: Record<string, unknown> = {
-      displayName,
+      displayName: resolvedDisplayName,
       lastLoginAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
@@ -623,7 +635,9 @@ export async function deletePosOrderFromFirestore(orderId: string): Promise<void
 export function subscribeStoreProfile(
   uid: string,
   isBootstrap: boolean,
-  onStoreData: (storeData: Partial<StoreProfile> & { ownerUid?: string }) => void
+  onStoreData: (
+    storeData: Partial<StoreProfile> & { ownerUid?: string; staffUids?: string[] }
+  ) => void
 ): () => void {
   if (isBootstrap) {
     const storeRef = doc(db, 'stores', DEFAULT_STORE_DOC_ID);
@@ -634,6 +648,7 @@ export function subscribeStoreProfile(
         const d = snap.data();
         onStoreData({
           ownerUid: d.ownerUid,
+          staffUids: Array.isArray(d.staffUids) ? (d.staffUids as string[]) : undefined,
           storeName: d.storeName,
           tagline: d.tagline,
           address: d.address,
@@ -668,6 +683,7 @@ export function subscribeStoreProfile(
       const d = snapshot.docs[0].data();
       onStoreData({
         ownerUid: d.ownerUid,
+        staffUids: Array.isArray(d.staffUids) ? (d.staffUids as string[]) : undefined,
         storeName: d.storeName,
         tagline: d.tagline,
         address: d.address,
@@ -911,6 +927,144 @@ export async function updateManagedUserRoleOrStatus(
       // Ignore if admin doc does not exist
     }
   }
+}
+
+export interface RegisterStaffInput {
+  displayName: string;
+  email: string;
+  password: string;
+  phone?: string;
+  role: UserRole;
+  adminUid: string;
+}
+
+export interface RegisterStaffResult {
+  user: AppUser;
+  verificationEmailSent: boolean;
+}
+
+/**
+ * Allows an authenticated Master/Owner to register a new Cashier (or Master)
+ * in Firebase Auth using an isolated secondary Firebase App instance so the
+ * active Master session is never signed out, then persists /users/{uid}.
+ */
+export async function registerStaffAccountByMaster(
+  input: RegisterStaffInput
+): Promise<RegisterStaffResult> {
+  const cleanName = clipString(input.displayName.trim(), 100);
+  const cleanEmail = clipString(input.email.trim().toLowerCase(), 200);
+  const cleanPhone = optionalClipString(input.phone, 32);
+  const role: UserRole = input.role === 'master' ? 'master' : 'cashier';
+  const safeAdminUid = sanitizeFirestoreId(input.adminUid, 'usr');
+
+  if (!cleanName) {
+    throw new Error('validation/name-required');
+  }
+  if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+    throw new Error('auth/invalid-email');
+  }
+  if (!input.password || input.password.length < 6) {
+    throw new Error('auth/weak-password');
+  }
+
+  const secondaryAppName = `kasirku-staff-creator-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+  const secondaryApp = initializeApp(firebaseConfig, secondaryAppName);
+  const secondaryAuth = getAuth(secondaryApp);
+
+  let newUid = '';
+  let verificationEmailSent = false;
+
+  try {
+    const credential = await createUserWithEmailAndPassword(
+      secondaryAuth,
+      cleanEmail,
+      input.password
+    );
+    newUid = sanitizeFirestoreId(credential.user.uid, 'usr');
+
+    await updateProfile(credential.user, { displayName: cleanName }).catch(() => {});
+
+    try {
+      await sendEmailVerification(credential.user);
+      verificationEmailSent = true;
+    } catch {
+      verificationEmailSent = false;
+    }
+  } finally {
+    await signOut(secondaryAuth).catch(() => {});
+    await deleteApp(secondaryApp).catch(() => {});
+  }
+
+  const userPayload: Record<string, unknown> = {
+    uid: newUid,
+    displayName: cleanName,
+    email: cleanEmail,
+    role,
+    isActive: true,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  if (cleanPhone !== undefined) {
+    userPayload.phone = cleanPhone;
+  }
+
+  try {
+    await setDoc(doc(db, 'users', newUid), userPayload);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.CREATE, `users/${newUid}`);
+  }
+
+  if (role === 'master') {
+    try {
+      await setDoc(doc(db, 'admins', newUid), {
+        uid: newUid,
+        email: cleanEmail,
+        assignedBy: safeAdminUid,
+        createdAt: serverTimestamp(),
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, `admins/${newUid}`);
+    }
+  }
+
+  // Ensure default store's staffUids immediately includes the new staff UID
+  try {
+    const storeRef = doc(db, 'stores', DEFAULT_STORE_DOC_ID);
+    const storeSnap = await getDoc(storeRef);
+    if (storeSnap.exists()) {
+      const storeData = storeSnap.data();
+      const existingStaff = Array.isArray(storeData.staffUids)
+        ? (storeData.staffUids as string[])
+        : [];
+      if (!existingStaff.includes(newUid) && existingStaff.length < 20) {
+        const nextStaff = buildStaffUids(storeData.ownerUid || safeAdminUid, [
+          ...existingStaff,
+          newUid,
+        ]);
+        await updateDoc(storeRef, {
+          staffUids: nextStaff,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+  } catch {
+    // Best-effort; App.tsx also syncs staffUids on users update
+  }
+
+  return {
+    user: {
+      id: newUid,
+      name: cleanName,
+      email: cleanEmail,
+      role,
+      phone: cleanPhone,
+      isActive: true,
+      createdAt: new Date().toISOString(),
+    },
+    verificationEmailSent,
+  };
 }
 
 export async function saveCashierClosingToFirestore(

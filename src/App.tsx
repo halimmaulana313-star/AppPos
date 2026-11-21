@@ -350,17 +350,23 @@ export default function App() {
         unsubscribers.push(
           subscribeStoreProfile(firebaseUser.uid, isBootstrap, (remoteStore) => {
             if (!active) return;
-            if (remoteStore.ownerUid) {
-              setFirestoreOwnerUid(remoteStore.ownerUid);
+            const { staffUids: remoteStaffUids, ...remoteStoreFields } = remoteStore;
+            if (remoteStoreFields.ownerUid) {
+              setFirestoreOwnerUid(remoteStoreFields.ownerUid);
+            }
+            if (Array.isArray(remoteStaffUids) && remoteStaffUids.length > 0) {
+              setFirestoreStaffUids((prev) =>
+                Array.from(new Set([...prev, ...remoteStaffUids])).slice(0, 20)
+              );
             }
             skipNextFirestoreStorePushRef.current = true;
             setStore((prev) =>
               sanitizeStoreProfile(
                 {
                   ...prev,
-                  ...remoteStore,
-                  logoUrl: remoteStore.logoUrl ?? prev.logoUrl,
-                  qrisImageUrl: remoteStore.qrisImageUrl ?? prev.qrisImageUrl,
+                  ...remoteStoreFields,
+                  logoUrl: remoteStoreFields.logoUrl ?? prev.logoUrl,
+                  qrisImageUrl: remoteStoreFields.qrisImageUrl ?? prev.qrisImageUrl,
                 },
                 DEFAULT_STORE_PROFILE
               )
@@ -1020,6 +1026,14 @@ export default function App() {
               setUsers={setUsers}
               currentUser={currentUser}
               isBootstrapAdmin={isBootstrap}
+              onStaffRegistered={(newUser) => {
+                setUsers((prev) =>
+                  prev.some((u) => u.id === newUser.id) ? prev : [...prev, newUser]
+                );
+                setFirestoreStaffUids((prev) =>
+                  prev.includes(newUser.id) ? prev : [...prev, newUser.id].slice(0, 20)
+                );
+              }}
             />
           )}
 

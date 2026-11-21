@@ -655,16 +655,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           ) : isMasterTab ? (
             /* Master / Owner Login Panel */
             <div className="space-y-4">
-              <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-700/50 text-xs text-amber-100 flex items-start gap-2.5">
-                <Crown className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                <div className="leading-relaxed">
-                  <strong className="text-amber-300">Login Pemilik / Master Toko</strong>
-                  <p className="text-[11px] text-amber-200/80 mt-0.5">
-                    Akses penuh produk, laporan, kelola kasir, logo & QRIS. Hak akses diverifikasi otomatis oleh akun terotorisasi.
-                  </p>
-                </div>
-              </div>
-
               {emailPasswordForm}
 
               <div className="relative py-0.5">

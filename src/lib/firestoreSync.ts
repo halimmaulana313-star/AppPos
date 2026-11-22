@@ -16,6 +16,7 @@ import {
   Timestamp,
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -442,7 +443,10 @@ export async function syncProductsBatchToFirestore(
     if (color !== undefined) commonFields.color = color;
 
     if (existingDocs.has(productId)) {
-      batch.update(docRef, commonFields);
+      batch.update(docRef, {
+        ...commonFields,
+        ...(image === undefined ? { image: deleteField() } : {}),
+      });
     } else {
       batch.set(docRef, {
         id: productId,

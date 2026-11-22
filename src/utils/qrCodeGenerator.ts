@@ -255,6 +255,79 @@ export async function optimizeLogoImageFile(
 }
 
 /**
+ * Validate, resize, and compress a local product photo through HTML5 canvas
+ * so EXIF/scripts are stripped and the output data URL always fits within
+ * Firestore's 300,000-char product image limit.
+ */
+export async function optimizeProductImageFile(
+  file: File,
+  maxDimension: number = 640
+): Promise<string> {
+  if (!ALLOWED_IMAGE_MIME_TYPES.has(file.type.toLowerCase())) {
+    throw new Error('Format file harus PNG, JPG, atau WebP.');
+  }
+  const maxUploadBytes = 5 * 1024 * 1024;
+  if (file.size <= 0 || file.size > maxUploadBytes) {
+    throw new Error('Ukuran gambar tidak valid atau melebihi batas 5MB.');
+  }
+
+  const rawDataUrl = await readFileAsDataUrl(file);
+  const maxDataUrlLen = 285_000;
+
+  return new Promise<string>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        if (!img.width || !img.height) {
+          reject(new Error('File gambar rusak atau berdimensi 0.'));
+          return;
+        }
+
+        const renderCandidate = (dim: number, mime: 'image/webp' | 'image/jpeg', quality: number) => {
+          const scale = Math.min(1, dim / Math.max(img.width, img.height));
+          const targetW = Math.max(1, Math.round(img.width * scale));
+          const targetH = Math.max(1, Math.round(img.height * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = targetW;
+          canvas.height = targetH;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return null;
+          if (mime === 'image/jpeg') {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, targetW, targetH);
+          }
+          ctx.drawImage(img, 0, 0, targetW, targetH);
+          return canvas.toDataURL(mime, quality);
+        };
+
+        const attempts: Array<{ dim: number; mime: 'image/webp' | 'image/jpeg'; q: number }> = [
+          { dim: maxDimension, mime: 'image/webp', q: 0.85 },
+          { dim: maxDimension, mime: 'image/webp', q: 0.72 },
+          { dim: maxDimension, mime: 'image/jpeg', q: 0.82 },
+          { dim: maxDimension, mime: 'image/jpeg', q: 0.68 },
+          { dim: 480, mime: 'image/jpeg', q: 0.68 },
+          { dim: 360, mime: 'image/jpeg', q: 0.6 },
+        ];
+
+        for (const attempt of attempts) {
+          const url = renderCandidate(attempt.dim, attempt.mime, attempt.q);
+          if (url && url.startsWith(`data:${attempt.mime}`) && url.length <= maxDataUrlLen) {
+            resolve(url);
+            return;
+          }
+        }
+
+        reject(new Error('Ukuran gambar setelah kompresi masih terlalu besar. Pilih foto lain.'));
+      } catch {
+        reject(new Error('Gagal memproses foto produk.'));
+      }
+    };
+    img.onerror = () => reject(new Error('File bukan gambar PNG/JPG/WebP yang valid.'));
+    img.src = rawDataUrl;
+  });
+}
+
+/**
  * Download QR Code as PNG file
  */
 export function downloadQRImage(dataUrl: string, fileName: string): void {

@@ -3,17 +3,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Edit2,
+  Image as ImageIcon,
   Plus,
   Search,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react';
 import { Product } from '../types/pos';
 import { formatRupiah } from '../utils/formatters';
+import { optimizeProductImageFile } from '../utils/qrCodeGenerator';
 import { sanitizeSafeImageUrl } from '../utils/sanitize';
 import { sounds } from '../utils/soundEffects';
 
@@ -45,6 +48,9 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
   const [formImage, setFormImage] = useState('');
   const [formDescription, setFormDescription] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
+  const [isProcessingImage, setIsProcessingImage] = useState(false);
+  const [isDraggingImage, setIsDraggingImage] = useState(false);
+  const imageFileInputRef = useRef<HTMLInputElement>(null);
 
   const [stockStatusFilter, setStockStatusFilter] = useState<'all' | 'low' | 'out'>('all');
 
@@ -88,9 +94,11 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
     setFormCostPrice(7000);
     setFormStock(50);
     setFormSku(`PRD-${Math.floor(100 + Math.random() * 900)}`);
-    setFormImage('https://images.unsplash.com/photo-1541167760496-1628856ab772?w=500&auto=format&fit=crop&q=80');
+    setFormImage('');
     setFormDescription('');
     setFormError(null);
+    setIsProcessingImage(false);
+    setIsDraggingImage(false);
     setIsModalOpen(true);
   };
 
@@ -105,7 +113,33 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
     setFormImage(p.image || '');
     setFormDescription(p.description || '');
     setFormError(null);
+    setIsProcessingImage(false);
+    setIsDraggingImage(false);
     setIsModalOpen(true);
+  };
+
+  const handleProcessProductImage = (file: File) => {
+    setFormError(null);
+    setIsProcessingImage(true);
+    void optimizeProductImageFile(file)
+      .then((dataUrl) => {
+        setFormImage(dataUrl);
+        sounds.playItemBeep();
+      })
+      .catch((err) => {
+        setFormError(
+          err instanceof Error
+            ? err.message
+            : 'Gagal memproses foto. Gunakan file PNG, JPG, atau WebP.'
+        );
+        sounds.playError();
+      })
+      .finally(() => {
+        setIsProcessingImage(false);
+        if (imageFileInputRef.current) {
+          imageFileInputRef.current.value = '';
+        }
+      });
   };
 
   const [productToDelete, setProductToDelete] = useState<{ id: string; name: string } | null>(null);
@@ -149,7 +183,7 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
         maxLength: 300_000,
       });
       if (!checked) {
-        setFormError('URL foto tidak valid. Gunakan URL https:// yang valid.');
+        setFormError('Foto produk tidak valid atau melebihi batas ukuran.');
         sounds.playError();
         return;
       }
@@ -461,12 +495,13 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
       {/* Modal Add / Edit Product */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+          <div className="bg-white rounded-2xl max-w-md w-full max-h-[90vh] overflow-y-auto shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50 sticky top-0 z-10">
               <h3 className="font-bold text-slate-800 text-base">
                 {editingProduct ? 'Ubah Produk' : 'Tambah Menu Baru'}
               </h3>
               <button
+                type="button"
                 onClick={() => setIsModalOpen(false)}
                 className="w-8 h-8 rounded-lg hover:bg-slate-200 text-slate-500 flex items-center justify-center"
               >
@@ -550,30 +585,127 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Stok Awal</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={1000000}
-                    value={formStock}
-                    onChange={(e) => setFormStock(Math.max(0, Number(e.target.value)))}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Stok Awal</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={1000000}
+                  value={formStock}
+                  onChange={(e) => setFormStock(Math.max(0, Number(e.target.value)))}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">URL Foto Produk</label>
-                  <input
-                    type="url"
-                    maxLength={2000}
-                    value={formImage}
-                    onChange={(e) => setFormImage(e.target.value)}
-                    placeholder="https://..."
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
+              {/* Local Photo Upload */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Foto Produk (Upload dari Perangkat)
+                </label>
+
+                <input
+                  ref={imageFileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      handleProcessProductImage(file);
+                    }
+                  }}
+                />
+
+                {formImage ? (
+                  <div className="flex items-center gap-3 p-2.5 rounded-xl border border-slate-200 bg-slate-50">
+                    <div className="w-16 h-16 rounded-lg overflow-hidden bg-white border border-slate-200 shrink-0">
+                      <img
+                        src={formImage}
+                        alt={formName || 'Preview Foto Menu'}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-slate-800 truncate">
+                        {isProcessingImage ? 'Memproses foto...' : 'Foto menu siap disimpan'}
+                      </p>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Format PNG/JPG/WebP otomatis dioptimalkan.
+                      </p>
+                      <div className="flex items-center gap-2 mt-2">
+                        <button
+                          type="button"
+                          disabled={isProcessingImage}
+                          onClick={() => imageFileInputRef.current?.click()}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 text-[11px] font-semibold cursor-pointer disabled:opacity-60"
+                        >
+                          <Upload className="w-3 h-3" />
+                          <span>Ganti Foto</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isProcessingImage}
+                          onClick={() => setFormImage('')}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 text-[11px] font-semibold cursor-pointer disabled:opacity-60"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>Hapus</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => !isProcessingImage && imageFileInputRef.current?.click()}
+                    onKeyDown={(e) => {
+                      if ((e.key === 'Enter' || e.key === ' ') && !isProcessingImage) {
+                        e.preventDefault();
+                        imageFileInputRef.current?.click();
+                      }
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setIsDraggingImage(true);
+                    }}
+                    onDragLeave={() => setIsDraggingImage(false)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setIsDraggingImage(false);
+                      const file = e.dataTransfer.files?.[0];
+                      if (file) {
+                        handleProcessProductImage(file);
+                      }
+                    }}
+                    className={`border-2 border-dashed rounded-xl p-4 text-center transition-colors cursor-pointer ${
+                      isDraggingImage
+                        ? 'border-emerald-500 bg-emerald-50/70'
+                        : 'border-slate-300 bg-slate-50/60 hover:border-emerald-400 hover:bg-emerald-50/30'
+                    }`}
+                  >
+                    {isProcessingImage ? (
+                      <div className="flex flex-col items-center gap-1.5 py-1">
+                        <div className="w-5 h-5 border-2 border-emerald-200 border-t-emerald-600 rounded-full animate-spin" />
+                        <span className="text-xs font-semibold text-emerald-700">
+                          Mengoptimalkan foto...
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center gap-1">
+                        <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center mb-0.5">
+                          <ImageIcon className="w-4 h-4" />
+                        </div>
+                        <p className="text-xs font-bold text-slate-700">
+                          Klik untuk pilih foto dari HP/PC atau seret ke sini
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          PNG, JPG, atau WebP (maks. 5MB • opsional)
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div>
@@ -598,9 +730,10 @@ export const ProductManagementView: React.FC<ProductManagementViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-md"
+                  disabled={isProcessingImage}
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-md disabled:opacity-60"
                 >
-                  Simpan Produk
+                  {isProcessingImage ? 'Memproses Foto...' : 'Simpan Produk'}
                 </button>
               </div>
             </form>

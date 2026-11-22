@@ -7,6 +7,7 @@ import React, { useEffect, useState } from 'react';
 import { Clock, LogOut, Menu, Store } from 'lucide-react';
 import { AppUser, PrinterConfig, StoreProfile } from '../types/pos';
 import { BluetoothPrinterState } from '../utils/bluetoothThermalPrinter';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface NavbarProps {
   store: StoreProfile;
@@ -108,8 +109,9 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
           </div>
 
-          {/* Right Section: Clock, User Profile, & Logout */}
+          {/* Right Section: Clock, Install App, User Profile, & Logout */}
           <div className="flex items-center space-x-2 sm:space-x-3">
+            <PWAInstallButton variant="navbar" />
             <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-900 border border-emerald-200">
               <Clock className="w-3.5 h-3.5 text-emerald-700" />
               <span className="font-mono font-bold text-xs sm:text-sm tracking-wide">

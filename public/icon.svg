@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="kasirkuGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981" />
+      <stop offset="100%" stop-color="#0f766e" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#kasirkuGrad)" />
+  <rect x="136" y="96" width="240" height="320" rx="28" fill="#ffffff" />
+  <rect x="172" y="148" width="168" height="24" rx="12" fill="#059669" />
+  <rect x="172" y="196" width="120" height="20" rx="10" fill="#94a3b8" />
+  <rect x="172" y="236" width="168" height="20" rx="10" fill="#cbd5e1" />
+  <rect x="172" y="276" width="104" height="20" rx="10" fill="#cbd5e1" />
+  <rect x="172" y="328" width="168" height="40" rx="12" fill="#ecfdf5" stroke="#10b981" stroke-width="6" />
+</svg>

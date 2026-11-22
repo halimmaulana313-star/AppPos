@@ -22,6 +22,7 @@ import {
 import { StoreProfile } from '../types/pos';
 import { useFirebase } from '../contexts/FirebaseContext';
 import { sounds } from '../utils/soundEffects';
+import { PWAInstallButton } from './PWAInstallButton';
 
 const LAST_EMAIL_STORAGE_KEY = 'kasirku_last_email_v1';
 const LAST_LOGIN_TAB_KEY = 'kasirku_last_login_role_v1';
@@ -706,6 +707,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             </div>
           )}
         </div>
+        <PWAInstallButton variant="login" />
       </div>
     </div>
   );

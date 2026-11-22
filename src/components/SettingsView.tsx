@@ -30,6 +30,7 @@ import { PRESET_LOGOS } from '../utils/presetLogos';
 import { getStoreQrisImageDataUrl, optimizeLogoImageFile, optimizeQrisImageFile } from '../utils/qrCodeGenerator';
 import { safeJsonParse } from '../utils/sanitize';
 import { sounds } from '../utils/soundEffects';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface SettingsViewProps {
   store: StoreProfile;
@@ -847,6 +848,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </button>
         </div>
       </form>
+
+      {/* Install as Android / Standalone App (PWA) */}
+      <PWAInstallButton variant="card" />
 
       {/* Backup and Data Management */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-5 space-y-4">

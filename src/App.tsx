@@ -12,6 +12,7 @@ import { DailyReportsView } from './components/DailyReportsView';
 import { LoginPage } from './components/LoginPage';
 import { LogoManagementView } from './components/LogoManagementView';
 import { Navbar } from './components/Navbar';
+import { OfflineIndicator } from './components/OfflineIndicator';
 import { PaymentModal } from './components/PaymentModal';
 import { PrinterSettingsModal } from './components/PrinterSettingsModal';
 import { ProductManagementView } from './components/ProductManagementView';
@@ -1204,6 +1205,8 @@ export default function App() {
           </div>
         </div>
       )}
+
+      <OfflineIndicator />
     </div>
   );
 }

@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   AlertCircle,
   Bluetooth,
@@ -26,9 +27,9 @@ import {
   formatDateTime,
   formatNumber,
   formatRupiah,
-  formatTimeOnly,
   getLineCharLimit,
-  justifyLine,
+  justifyWrappedLines,
+  wrapTextLines,
 } from '../utils/formatters';
 import { generateDailyReportReceiptPDF } from '../utils/receiptPdfGenerator';
 import { sounds } from '../utils/soundEffects';
@@ -58,59 +59,68 @@ export const ReportReceiptModal: React.FC<ReportReceiptModalProps> = ({
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  useEffect(() => {
+    if (!isOpen || !report) return;
+    document.body.classList.add('thermal-print-active');
+    return () => {
+      document.body.classList.remove('thermal-print-active');
+    };
+  }, [isOpen, report]);
+
   if (!isOpen || !report) return null;
 
-  const maxChars = getLineCharLimit(printerConfig.paperWidth);
+  const maxChars = getLineCharLimit(printerConfig.paperWidth, printerConfig.customCharPerLine);
+  const printedAt = formatDateTime(new Date().toISOString());
 
   const generateReportText = () => {
     const lines: string[] = [];
-    lines.push(centerText('LAPORAN PENJUALAN HARIAN', maxChars));
-    lines.push(centerText(store.storeName, maxChars));
+    wrapTextLines('LAPORAN PENJUALAN HARIAN', maxChars).forEach((ln) => lines.push(centerText(ln, maxChars)));
+    wrapTextLines(store.storeName, maxChars).forEach((ln) => lines.push(centerText(ln, maxChars)));
     lines.push(createSeparator('=', maxChars));
 
-    lines.push(justifyLine('Tanggal:', formatDateOnly(report.date), maxChars));
-    lines.push(justifyLine('Dicetak:', formatDateTime(new Date().toISOString()), maxChars));
-    lines.push(justifyLine('Kasir:', 'Kasir Utama', maxChars));
+    lines.push(...justifyWrappedLines('Tanggal:', formatDateOnly(report.date), maxChars));
+    lines.push(...justifyWrappedLines('Waktu Cetak:', printedAt, maxChars));
+    lines.push(...justifyWrappedLines('Kasir:', 'Kasir Utama', maxChars));
     lines.push(createSeparator('-', maxChars));
 
     lines.push('RINGKASAN PENJUALAN');
-    lines.push(justifyLine('Total Transaksi', `${report.totalTransactions} Trx`, maxChars));
-    lines.push(justifyLine('Item Terjual', `${report.totalItemsSold} Pcs`, maxChars));
-    lines.push(justifyLine('AOV (Rata-rata/Nota)', formatRupiah(report.averageOrderValue), maxChars));
-    lines.push(justifyLine('Total Diskon', formatRupiah(report.totalDiscounts), maxChars));
-    lines.push(justifyLine('Total Pajak', formatRupiah(report.totalTax), maxChars));
+    lines.push(...justifyWrappedLines('Total Transaksi', `${report.totalTransactions} Trx`, maxChars));
+    lines.push(...justifyWrappedLines('Item Terjual', `${report.totalItemsSold} Pcs`, maxChars));
+    lines.push(...justifyWrappedLines('Rata-rata/Nota (AOV)', formatRupiah(report.averageOrderValue), maxChars));
+    lines.push(...justifyWrappedLines('Total Diskon', formatRupiah(report.totalDiscounts), maxChars));
+    lines.push(...justifyWrappedLines('Total Pajak', formatRupiah(report.totalTax), maxChars));
     if (report.totalServiceCharge > 0) {
-      lines.push(justifyLine('Total Layanan', formatRupiah(report.totalServiceCharge), maxChars));
+      lines.push(...justifyWrappedLines('Total Layanan', formatRupiah(report.totalServiceCharge), maxChars));
     }
 
     lines.push(createSeparator('-', maxChars));
-    lines.push(justifyLine('TOTAL OMSET', formatRupiah(report.totalGrossSales), maxChars));
+    lines.push(...justifyWrappedLines('TOTAL OMSET', formatRupiah(report.totalGrossSales), maxChars));
     lines.push(createSeparator('=', maxChars));
 
     lines.push('RINCIAN PEMBAYARAN');
     lines.push(
-      justifyLine(
+      ...justifyWrappedLines(
         `Tunai (${report.paymentBreakdown.cash.count}x)`,
         formatRupiah(report.paymentBreakdown.cash.total),
         maxChars
       )
     );
     lines.push(
-      justifyLine(
+      ...justifyWrappedLines(
         `QRIS (${report.paymentBreakdown.qris.count}x)`,
         formatRupiah(report.paymentBreakdown.qris.total),
         maxChars
       )
     );
     lines.push(
-      justifyLine(
+      ...justifyWrappedLines(
         `Transfer (${report.paymentBreakdown.transfer.count}x)`,
         formatRupiah(report.paymentBreakdown.transfer.total),
         maxChars
       )
     );
     lines.push(
-      justifyLine(
+      ...justifyWrappedLines(
         `Debit/Kredit (${report.paymentBreakdown.debit.count + report.paymentBreakdown.credit.count}x)`,
         formatRupiah(report.paymentBreakdown.debit.total + report.paymentBreakdown.credit.total),
         maxChars
@@ -118,19 +128,19 @@ export const ReportReceiptModal: React.FC<ReportReceiptModalProps> = ({
     );
 
     lines.push(createSeparator('-', maxChars));
-    lines.push('PRODUK TERLARIS (TOP SALES)');
+    lines.push('PRODUK TERLARIS');
     if (report.topProducts.length === 0) {
       lines.push(centerText('Belum ada transaksi', maxChars));
     } else {
       report.topProducts.slice(0, 5).forEach((p, idx) => {
-        lines.push(justifyLine(`${idx + 1}. ${p.name}`, `${p.quantity}x | ${formatNumber(p.totalRevenue)}`, maxChars));
+        lines.push(...justifyWrappedLines(`${idx + 1}. ${p.name}`, `${p.quantity}x | ${formatNumber(p.totalRevenue)}`, maxChars));
       });
     }
 
     lines.push(createSeparator('=', maxChars));
     lines.push(centerText('Tanda Tangan Penanggung Jawab', maxChars));
     lines.push('\n\n');
-    lines.push(centerText('( .............................. )', maxChars));
+    lines.push(centerText('( ........................ )', maxChars));
     lines.push(centerText('Kasir / Supervisor Toko', maxChars));
 
     return lines.join('\n');
@@ -191,6 +201,127 @@ export const ReportReceiptModal: React.FC<ReportReceiptModalProps> = ({
     });
   };
 
+  const reportReceiptBody = (
+    <>
+      <div className="text-center space-y-1">
+        <div className="font-extrabold text-sm sm:text-base tracking-wide text-slate-900 print:text-black">
+          LAPORAN PENJUALAN HARIAN
+        </div>
+        <div className="font-bold text-xs text-slate-700 print:text-black">{store.storeName}</div>
+      </div>
+
+      <div className="my-2 border-t-2 border-slate-800 print:border-black" />
+
+      <div className="text-[11px] space-y-0.5 text-slate-700 print:text-black tabular-nums">
+        <div className="flex justify-between gap-2">
+          <span>Tanggal:</span>
+          <span className="font-semibold text-right">{formatDateOnly(report.date)}</span>
+        </div>
+        <div className="flex justify-between gap-2">
+          <span>Waktu Cetak:</span>
+          <span className="text-right">{printedAt}</span>
+        </div>
+        <div className="flex justify-between gap-2">
+          <span>Kasir:</span>
+          <span className="text-right">Kasir Utama</span>
+        </div>
+      </div>
+
+      <div className="my-2 border-t border-dashed border-slate-300 print:border-slate-700" />
+
+      {/* Summary */}
+      <div className="font-bold text-[11px] text-slate-900 print:text-black mb-1">RINGKASAN PENJUALAN</div>
+      <div className="space-y-0.5 text-[11px] text-slate-700 print:text-black tabular-nums">
+        <div className="flex justify-between gap-2">
+          <span>Total Transaksi</span>
+          <span className="font-bold">{report.totalTransactions} Trx</span>
+        </div>
+        <div className="flex justify-between gap-2">
+          <span>Item Terjual</span>
+          <span>{report.totalItemsSold} Pcs</span>
+        </div>
+        <div className="flex justify-between gap-2">
+          <span>Rata-rata/Nota (AOV)</span>
+          <span>{formatRupiah(report.averageOrderValue)}</span>
+        </div>
+        <div className="flex justify-between gap-2">
+          <span>Total Diskon</span>
+          <span>{formatRupiah(report.totalDiscounts)}</span>
+        </div>
+        <div className="flex justify-between gap-2">
+          <span>Total Pajak</span>
+          <span>{formatRupiah(report.totalTax)}</span>
+        </div>
+        {report.totalServiceCharge > 0 && (
+          <div className="flex justify-between gap-2">
+            <span>Total Layanan</span>
+            <span>{formatRupiah(report.totalServiceCharge)}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="my-2 border-t border-dashed border-slate-300 print:border-slate-700" />
+
+      <div className="flex justify-between items-center gap-2 text-sm font-extrabold text-slate-900 print:text-black tabular-nums">
+        <span>TOTAL OMSET</span>
+        <span className="text-base text-emerald-700 print:text-black">{formatRupiah(report.totalGrossSales)}</span>
+      </div>
+
+      <div className="my-2 border-t-2 border-slate-800 print:border-black" />
+
+      {/* Payments */}
+      <div className="font-bold text-[11px] text-slate-900 print:text-black mb-1">RINCIAN PEMBAYARAN</div>
+      <div className="space-y-0.5 text-[11px] text-slate-700 print:text-black tabular-nums">
+        <div className="flex justify-between gap-2">
+          <span>Tunai ({report.paymentBreakdown.cash.count}x)</span>
+          <span>{formatRupiah(report.paymentBreakdown.cash.total)}</span>
+        </div>
+        <div className="flex justify-between gap-2">
+          <span>QRIS ({report.paymentBreakdown.qris.count}x)</span>
+          <span>{formatRupiah(report.paymentBreakdown.qris.total)}</span>
+        </div>
+        <div className="flex justify-between gap-2">
+          <span>Transfer ({report.paymentBreakdown.transfer.count}x)</span>
+          <span>{formatRupiah(report.paymentBreakdown.transfer.total)}</span>
+        </div>
+        <div className="flex justify-between gap-2">
+          <span>Debit/Kredit ({report.paymentBreakdown.debit.count + report.paymentBreakdown.credit.count}x)</span>
+          <span>{formatRupiah(report.paymentBreakdown.debit.total + report.paymentBreakdown.credit.total)}</span>
+        </div>
+      </div>
+
+      <div className="my-2 border-t border-dashed border-slate-300 print:border-slate-700" />
+
+      {/* Top Products */}
+      <div className="font-bold text-[11px] text-slate-900 print:text-black mb-1">PRODUK TERLARIS</div>
+      <div className="space-y-1 text-[11px] tabular-nums">
+        {report.topProducts.length === 0 ? (
+          <div className="text-center text-slate-500 print:text-black">Belum ada transaksi</div>
+        ) : (
+          report.topProducts.slice(0, 5).map((p, idx) => (
+            <div key={idx} className="flex justify-between items-start gap-2 text-slate-700 print:text-black">
+              <span className="break-words min-w-0">
+                {idx + 1}. {p.name}
+              </span>
+              <span className="shrink-0 font-medium text-right">
+                {p.quantity}x | {formatNumber(p.totalRevenue)}
+              </span>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="my-3 border-t border-dashed border-slate-300 print:border-slate-700" />
+
+      {/* Signature Area */}
+      <div className="text-center text-[10px] text-slate-600 print:text-black pt-2 space-y-8">
+        <p>Tanda Tangan Penanggung Jawab</p>
+        <div className="border-b border-slate-400 print:border-black w-3/4 mx-auto" />
+        <p className="-mt-6">Kasir / Supervisor Toko</p>
+      </div>
+    </>
+  );
+
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden flex flex-col max-h-[92vh] animate-in fade-in zoom-in-95 duration-200">
@@ -244,112 +375,7 @@ export const ReportReceiptModal: React.FC<ReportReceiptModalProps> = ({
             } font-mono-thermal text-xs text-slate-900 border border-slate-200`}
           >
             <div className="receipt-cut-top -mt-4 -mx-4 mb-3"></div>
-
-            <div className="text-center space-y-1">
-              <div className="font-extrabold text-sm sm:text-base tracking-wide text-slate-900">
-                LAPORAN PENJUALAN HARIAN
-              </div>
-              <div className="font-bold text-xs text-slate-700">{store.storeName}</div>
-            </div>
-
-            <div className="my-2 border-t-2 border-slate-800" />
-
-            <div className="text-[11px] space-y-0.5 text-slate-700">
-              <div className="flex justify-between">
-                <span>Tanggal:</span>
-                <span className="font-semibold">{formatDateOnly(report.date)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Waktu Cetak:</span>
-                <span>{formatTimeOnly(new Date().toISOString())}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Kasir:</span>
-                <span>Kasir Utama</span>
-              </div>
-            </div>
-
-            <div className="my-2 border-t border-dashed border-slate-300" />
-
-            {/* Summary */}
-            <div className="font-bold text-[11px] text-slate-900 mb-1">RINGKASAN PENJUALAN</div>
-            <div className="space-y-0.5 text-[11px] text-slate-700">
-              <div className="flex justify-between">
-                <span>Total Transaksi</span>
-                <span className="font-bold">{report.totalTransactions} Trx</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Item Terjual</span>
-                <span>{report.totalItemsSold} Pcs</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Rata-rata/Nota (AOV)</span>
-                <span>{formatRupiah(report.averageOrderValue)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Total Diskon</span>
-                <span>{formatRupiah(report.totalDiscounts)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Total Pajak</span>
-                <span>{formatRupiah(report.totalTax)}</span>
-              </div>
-            </div>
-
-            <div className="my-2 border-t border-dashed border-slate-300" />
-
-            <div className="flex justify-between items-center text-sm font-extrabold text-slate-900">
-              <span>TOTAL OMSET</span>
-              <span className="text-base text-emerald-700">{formatRupiah(report.totalGrossSales)}</span>
-            </div>
-
-            <div className="my-2 border-t-2 border-slate-800" />
-
-            {/* Payments */}
-            <div className="font-bold text-[11px] text-slate-900 mb-1">RINCIAN PEMBAYARAN</div>
-            <div className="space-y-0.5 text-[11px] text-slate-700">
-              <div className="flex justify-between">
-                <span>Tunai ({report.paymentBreakdown.cash.count}x)</span>
-                <span>{formatRupiah(report.paymentBreakdown.cash.total)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>QRIS ({report.paymentBreakdown.qris.count}x)</span>
-                <span>{formatRupiah(report.paymentBreakdown.qris.total)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Transfer ({report.paymentBreakdown.transfer.count}x)</span>
-                <span>{formatRupiah(report.paymentBreakdown.transfer.total)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Debit/Kredit ({report.paymentBreakdown.debit.count + report.paymentBreakdown.credit.count}x)</span>
-                <span>{formatRupiah(report.paymentBreakdown.debit.total + report.paymentBreakdown.credit.total)}</span>
-              </div>
-            </div>
-
-            <div className="my-2 border-t border-dashed border-slate-300" />
-
-            {/* Top Products */}
-            <div className="font-bold text-[11px] text-slate-900 mb-1">PRODUK TERLARIS</div>
-            <div className="space-y-1 text-[11px]">
-              {report.topProducts.slice(0, 5).map((p, idx) => (
-                <div key={idx} className="flex justify-between text-slate-700">
-                  <span className="truncate pr-2">
-                    {idx + 1}. {p.name}
-                  </span>
-                  <span className="shrink-0 font-medium">{p.quantity}x</span>
-                </div>
-              ))}
-            </div>
-
-            <div className="my-3 border-t border-dashed border-slate-300" />
-
-            {/* Signature Area */}
-            <div className="text-center text-[10px] text-slate-600 pt-2 space-y-8">
-              <p>Tanda Tangan Penanggung Jawab</p>
-              <div className="border-b border-slate-400 w-3/4 mx-auto" />
-              <p className="-mt-6">Kasir / Supervisor Toko</p>
-            </div>
-
+            {reportReceiptBody}
             <div className="receipt-cut-bottom -mb-4 -mx-4 mt-3"></div>
           </div>
         </div>
@@ -439,13 +465,17 @@ export const ReportReceiptModal: React.FC<ReportReceiptModalProps> = ({
         </div>
       </div>
 
-      {/* Hidden browser print element */}
-      <div
-        id="thermal-print-target"
-        className={`hidden print:block ${printerConfig.paperWidth === '80mm' ? 'paper-80mm' : ''}`}
-      >
-        <pre className="font-mono text-xs whitespace-pre-wrap leading-tight">{generateReportText()}</pre>
-      </div>
+      {/* Portaled visual print target matching preview 1:1 */}
+      {typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            id="thermal-print-target"
+            className={`hidden print:block ${printerConfig.paperWidth === '80mm' ? 'paper-80mm' : ''}`}
+          >
+            <div className="receipt-paper font-mono-thermal text-xs text-black">{reportReceiptBody}</div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

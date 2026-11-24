@@ -186,6 +186,10 @@
           "minLength": 1,
           "maxLength": 10
         },
+        "receiptTexts": {
+          "type": "object",
+          "description": "Custom receipt wording and labels editable by store Master/Owner"
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"

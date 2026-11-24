@@ -16,11 +16,18 @@ import {
   formatDateOnly,
   formatDateTime,
   formatNumber,
+  formatOrderTypeLabel,
+  formatPaymentMethodLabel,
   formatRupiah,
+  formatShortDate,
   formatTimeOnly,
   getLineCharLimit,
-  justifyLine,
+  justifyWrappedLines,
+  resolveReceiptTexts,
+  sanitizeThermalAscii,
+  wrapTextLines,
 } from './formatters';
+import { sanitizeSafeImageUrl } from './sanitize';
 
 // Common Bluetooth Low Energy (BLE) Thermal Printer Service UUIDs
 const KNOWN_PRINTER_SERVICES = [
@@ -238,43 +245,202 @@ class BluetoothThermalPrinterManager {
     return true;
   }
 
+  /**
+   * Convert store logo URL into ESC/POS GS v 0 monochrome raster bitmap bytes.
+   * Composites onto white background and applies Floyd-Steinberg dithering for crisp thermal output.
+   */
+  private async imageToEscPosRaster(
+    logoUrl: string | undefined,
+    maxDotWidth: number,
+    maxDotHeight: number
+  ): Promise<number[] | null> {
+    if (typeof document === 'undefined' || !logoUrl) return null;
+    const safeUrl = sanitizeSafeImageUrl(logoUrl, { allowPresetSvg: true, maxLength: 350000 });
+    if (!safeUrl) return null;
+
+    return new Promise<number[] | null>((resolve) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      const timer = setTimeout(() => resolve(null), 2500);
+
+      img.onload = () => {
+        clearTimeout(timer);
+        try {
+          const naturalW = img.naturalWidth || img.width || 128;
+          const naturalH = img.naturalHeight || img.height || 128;
+          if (naturalW <= 0 || naturalH <= 0) {
+            resolve(null);
+            return;
+          }
+
+          const scale = Math.min(maxDotWidth / naturalW, maxDotHeight / naturalH, 1);
+          const scaledW = Math.max(8, Math.round(naturalW * scale));
+          const targetW = Math.ceil(scaledW / 8) * 8;
+          const targetH = Math.max(8, Math.round(naturalH * scale));
+
+          const canvas = document.createElement('canvas');
+          canvas.width = targetW;
+          canvas.height = targetH;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(null);
+            return;
+          }
+
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, targetW, targetH);
+          const drawOffsetX = Math.floor((targetW - scaledW) / 2);
+          ctx.drawImage(img, drawOffsetX, 0, scaledW, targetH);
+
+          const imgData = ctx.getImageData(0, 0, targetW, targetH).data;
+          const lum = new Float32Array(targetW * targetH);
+
+          for (let i = 0; i < targetW * targetH; i++) {
+            const p = i * 4;
+            const alpha = imgData[p + 3] / 255;
+            const gray =
+              0.299 * imgData[p] + 0.587 * imgData[p + 1] + 0.114 * imgData[p + 2];
+            lum[i] = alpha * gray + (1 - alpha) * 255;
+          }
+
+          // Floyd-Steinberg dithering for sharp logos & photos
+          for (let y = 0; y < targetH; y++) {
+            for (let x = 0; x < targetW; x++) {
+              const idx = y * targetW + x;
+              const oldVal = lum[idx];
+              const newVal = oldVal < 168 ? 0 : 255;
+              lum[idx] = newVal;
+              // Preserve clean pure-white background without stray dots
+              if (oldVal >= 242) continue;
+              const err = oldVal - newVal;
+              if (x + 1 < targetW) lum[idx + 1] += (err * 7) / 16;
+              if (y + 1 < targetH) {
+                if (x > 0) lum[idx + targetW - 1] += (err * 3) / 16;
+                lum[idx + targetW] += (err * 5) / 16;
+                if (x + 1 < targetW) lum[idx + targetW + 1] += (err * 1) / 16;
+              }
+            }
+          }
+
+          const widthBytes = targetW / 8;
+          const xL = widthBytes & 0xff;
+          const xH = (widthBytes >> 8) & 0xff;
+          const yL = targetH & 0xff;
+          const yH = (targetH >> 8) & 0xff;
+
+          const out: number[] = [0x1d, 0x76, 0x30, 0x00, xL, xH, yL, yH];
+          for (let y = 0; y < targetH; y++) {
+            for (let bx = 0; bx < widthBytes; bx++) {
+              let byteVal = 0;
+              for (let bit = 0; bit < 8; bit++) {
+                const px = bx * 8 + bit;
+                if (lum[y * targetW + px] < 128) {
+                  byteVal |= 1 << (7 - bit);
+                }
+              }
+              out.push(byteVal);
+            }
+          }
+
+          resolve(out);
+        } catch {
+          resolve(null);
+        }
+      };
+
+      img.onerror = () => {
+        clearTimeout(timer);
+        resolve(null);
+      };
+
+      img.src = safeUrl;
+    });
+  }
+
   /* =========================================================
    * ESC/POS BYTE GENERATORS
    * ========================================================= */
 
   /**
-   * Generate raw ESC/POS bytes for an Order Receipt
+   * Async variant of generateReceiptBytes that rasterizes and embeds the store logo
+   * at the top of the receipt when config.printStoreLogo && store.logoUrl are active.
+   */
+  async generateReceiptBytesWithLogo(
+    order: Order,
+    store: StoreProfile,
+    config: PrinterConfig
+  ): Promise<Uint8Array> {
+    let logoRaster: number[] | null = null;
+    if (config.printStoreLogo && store.logoUrl) {
+      const maxWidth = config.paperWidth === '80mm' ? 240 : 184;
+      const maxHeight = config.paperWidth === '80mm' ? 160 : 128;
+      logoRaster = await this.imageToEscPosRaster(store.logoUrl, maxWidth, maxHeight);
+    }
+    return this.buildOrderReceiptBytes(order, store, config, logoRaster);
+  }
+
+  /**
+   * Generate raw ESC/POS bytes for an Order Receipt (sync fallback without async image load)
    */
   generateReceiptBytes(order: Order, store: StoreProfile, config: PrinterConfig): Uint8Array {
-    const maxChars = getLineCharLimit(config.paperWidth);
+    return this.buildOrderReceiptBytes(order, store, config, null);
+  }
+
+  private buildOrderReceiptBytes(
+    order: Order,
+    store: StoreProfile,
+    config: PrinterConfig,
+    logoRaster: number[] | null
+  ): Uint8Array {
+    const maxChars = getLineCharLimit(config.paperWidth, config.customCharPerLine);
     const builder = new EscPosBuilder();
+    const rt = resolveReceiptTexts(store);
+
+    const writeWrapped = (left: string, right: string) => {
+      for (const ln of justifyWrappedLines(sanitizeThermalAscii(left), sanitizeThermalAscii(right), maxChars)) {
+        builder.line(ln);
+      }
+    };
+
+    const writeCenteredWrapped = (text: string, lineLimit = maxChars) => {
+      for (const ln of wrapTextLines(sanitizeThermalAscii(text), lineLimit)) {
+        builder.line(ln);
+      }
+    };
 
     // 1. Initialize Printer
     builder.init();
 
-    // 2. Open Cash Drawer if enabled
-    if (config.openCashDrawer) {
+    // 2. Open Cash Drawer if enabled (only on cash transactions)
+    if (config.openCashDrawer && order.paymentMethod === 'cash') {
       builder.openCashDrawer();
     }
 
     // 3. Store Header (Centered)
     builder.alignCenter();
+    if (logoRaster && logoRaster.length > 0) {
+      builder.rasterImage(logoRaster);
+      builder.line('');
+    }
     builder.bold(true);
     builder.doubleSize(true);
-    builder.line(store.storeName.toUpperCase());
+    writeCenteredWrapped(store.storeName, Math.max(8, Math.floor(maxChars / 2)));
     builder.doubleSize(false);
 
-    if (store.tagline) {
-      builder.bold(false);
-      builder.line(store.tagline);
-    }
-
     builder.bold(false);
+    if (store.tagline) {
+      writeCenteredWrapped(store.tagline);
+    }
     if (store.address) {
-      builder.line(store.address);
+      writeCenteredWrapped(store.address);
     }
     if (store.phone) {
-      builder.line(`Telp: ${store.phone}`);
+      writeCenteredWrapped(`${rt.phoneLabel}: ${store.phone}`);
+    }
+    if (rt.headerNote) {
+      for (const hnLine of rt.headerNote.split(/\r?\n/)) {
+        if (hnLine.trim()) writeCenteredWrapped(hnLine);
+      }
     }
 
     // Divider
@@ -282,13 +448,13 @@ class BluetoothThermalPrinterManager {
     builder.line(createSeparator('=', maxChars));
 
     // 4. Order Metadata
-    builder.line(justifyLine(`No: #${order.id}`, formatTimeOnly(order.timestamp), maxChars));
-    builder.line(justifyLine(`Tgl: ${formatDateOnly(order.timestamp)}`, `Kasir: ${order.cashierName}`, maxChars));
-    
-    if (order.customerName || order.tableNumber) {
-      const custInfo = order.customerName ? `Plg: ${order.customerName}` : '';
-      const tableInfo = order.tableNumber ? `Meja: ${order.tableNumber}` : (order.orderType === 'takeaway' ? 'Bungkus' : '');
-      builder.line(justifyLine(custInfo, tableInfo, maxChars));
+    writeWrapped(`${rt.receiptNumberLabel}: #${order.id}`, formatTimeOnly(order.timestamp));
+    writeWrapped(`${rt.dateLabel}: ${formatShortDate(order.timestamp)}`, `${rt.cashierLabel}: ${order.cashierName}`);
+
+    if (order.customerName || order.tableNumber || order.orderType !== 'dine_in') {
+      const custInfo = `${rt.customerLabel}: ${order.customerName || '-'}`;
+      const tableInfo = formatOrderTypeLabel(order.orderType, order.tableNumber);
+      writeWrapped(custInfo, tableInfo);
     }
 
     builder.line(createSeparator('-', maxChars));
@@ -297,34 +463,40 @@ class BluetoothThermalPrinterManager {
     for (const item of order.items) {
       const itemTitle = `${item.quantity}x ${item.product.name}`;
       const itemPrice = formatNumber(item.product.price * item.quantity);
-      builder.line(justifyLine(itemTitle, itemPrice, maxChars));
+      writeWrapped(itemTitle, itemPrice);
 
-      // Optional note or item discount
       if (item.note) {
-        builder.line(`  * ${item.note}`);
+        for (const nl of wrapTextLines(`  * ${item.note}`, maxChars)) {
+          builder.line(nl);
+        }
       }
       if (item.discount > 0) {
-        builder.line(justifyLine('  Diskon Item', `-${formatNumber(item.discount)}`, maxChars));
+        writeWrapped('  Diskon Item', `-${formatNumber(item.discount)}`);
       }
     }
 
     builder.line(createSeparator('-', maxChars));
 
     // 6. Totals
-    builder.line(justifyLine('Subtotal', formatRupiah(order.subtotal), maxChars));
+    writeWrapped(rt.subtotalLabel, formatRupiah(order.subtotal));
 
     if (order.discount > 0) {
-      const pct = order.discountPercent ?? (order.subtotal > 0 ? Math.round((order.discount / order.subtotal) * 100) : 0);
-      const discTitle = pct > 0 ? `Diskon Nota (${pct}%)` : 'Diskon Nota';
-      builder.line(justifyLine(discTitle, `-${formatRupiah(order.discount)}`, maxChars));
+      const pct =
+        order.discountPercent ??
+        (order.subtotal > 0 ? Math.round((order.discount / order.subtotal) * 100) : 0);
+      const discTitle = pct > 0 ? `${rt.discountLabel} (${pct}%)` : rt.discountLabel;
+      writeWrapped(discTitle, `-${formatRupiah(order.discount)}`);
     }
 
     if (order.taxAmount > 0) {
-      builder.line(justifyLine(`Pajak (${Math.round(order.taxRate * 100)}%)`, formatRupiah(order.taxAmount), maxChars));
+      writeWrapped(`${rt.taxLabel} (${Math.round(order.taxRate * 100)}%)`, formatRupiah(order.taxAmount));
     }
 
     if (order.serviceChargeAmount > 0) {
-      builder.line(justifyLine(`Layanan (${Math.round(order.serviceChargeRate * 100)}%)`, formatRupiah(order.serviceChargeAmount), maxChars));
+      writeWrapped(
+        `${rt.serviceLabel} (${Math.round(order.serviceChargeRate * 100)}%)`,
+        formatRupiah(order.serviceChargeAmount)
+      );
     }
 
     builder.line(createSeparator('=', maxChars));
@@ -332,23 +504,18 @@ class BluetoothThermalPrinterManager {
     // Grand Total (Bold Double Height)
     builder.bold(true);
     builder.doubleHeight(true);
-    builder.line(justifyLine('TOTAL', formatRupiah(order.total), maxChars));
+    writeWrapped(rt.totalLabel, formatRupiah(order.total));
     builder.doubleHeight(false);
     builder.bold(false);
 
+    builder.line(createSeparator('-', maxChars));
+
     // Payment details
-    const methodLabels: Record<string, string> = {
-      cash: 'TUNAI',
-      qris: 'QRIS',
-      transfer: 'TRANSFER',
-      debit: 'DEBIT',
-      credit: 'KREDIT',
-    };
-    builder.line(justifyLine('Metode Bayar', methodLabels[order.paymentMethod] || order.paymentMethod.toUpperCase(), maxChars));
+    writeWrapped(rt.paymentMethodLabel, formatPaymentMethodLabel(order.paymentMethod));
 
     if (order.paymentMethod === 'cash') {
-      builder.line(justifyLine('Bayar', formatRupiah(order.amountPaid), maxChars));
-      builder.line(justifyLine('Kembalian', formatRupiah(order.change), maxChars));
+      writeWrapped(rt.amountPaidLabel, formatRupiah(order.amountPaid));
+      writeWrapped(rt.changeLabel, formatRupiah(order.change));
     }
 
     builder.line(createSeparator('-', maxChars));
@@ -356,14 +523,16 @@ class BluetoothThermalPrinterManager {
     // 7. Footer
     builder.alignCenter();
     if (config.printWifiInfo && store.wifiName) {
-      builder.line(`WiFi: ${store.wifiName} | Pass: ${store.wifiPassword || '-'}`);
+      writeCenteredWrapped(`${rt.wifiLabel}: ${store.wifiName} | ${rt.wifiPasswordLabel}: ${store.wifiPassword || '-'}`);
     }
 
     if (config.printFooterNote && store.footerNote) {
-      builder.line(store.footerNote);
+      for (const fnLine of store.footerNote.split(/\r?\n/)) {
+        writeCenteredWrapped(fnLine);
+      }
     } else {
-      builder.line('Terima Kasih Atas Kunjungan Anda!');
-      builder.line('Barang yang sudah dibeli tidak dapat ditukar');
+      writeCenteredWrapped('Terima Kasih Atas Kunjungan Anda!');
+      writeCenteredWrapped('Barang yang dibeli tidak dapat ditukar');
     }
 
     // Spacing & Cut
@@ -379,91 +548,79 @@ class BluetoothThermalPrinterManager {
    * Generate raw ESC/POS bytes for Daily Sales Report (Z-Report)
    */
   generateDailyReportBytes(report: DailySalesReport, store: StoreProfile, config: PrinterConfig): Uint8Array {
-    const maxChars = getLineCharLimit(config.paperWidth);
+    const maxChars = getLineCharLimit(config.paperWidth, config.customCharPerLine);
     const builder = new EscPosBuilder();
+
+    const writeWrapped = (left: string, right: string) => {
+      for (const ln of justifyWrappedLines(sanitizeThermalAscii(left), sanitizeThermalAscii(right), maxChars)) {
+        builder.line(ln);
+      }
+    };
 
     builder.init();
     builder.alignCenter();
     builder.bold(true);
     builder.doubleHeight(true);
-    builder.line('LAPORAN PENJUALAN HARIAN');
+    for (const ln of wrapTextLines('LAPORAN PENJUALAN HARIAN', maxChars)) {
+      builder.line(ln);
+    }
     builder.doubleHeight(false);
-    builder.line(store.storeName.toUpperCase());
+    for (const ln of wrapTextLines(store.storeName, maxChars)) {
+      builder.line(ln);
+    }
     builder.bold(false);
+    builder.alignLeft();
     builder.line(createSeparator('=', maxChars));
 
-    builder.alignLeft();
-    builder.line(justifyLine('Tanggal Laporan:', formatDateOnly(report.date), maxChars));
-    builder.line(justifyLine('Waktu Cetak:', formatDateTime(new Date().toISOString()), maxChars));
-    builder.line(justifyLine('Dicetak Oleh:', 'Kasir Utama', maxChars));
+    writeWrapped('Tanggal:', formatDateOnly(report.date));
+    writeWrapped('Waktu Cetak:', formatDateTime(new Date().toISOString()));
+    writeWrapped('Kasir:', 'Kasir Utama');
     builder.line(createSeparator('-', maxChars));
 
     // Summary Section
     builder.bold(true);
     builder.line('RINGKASAN PENJUALAN');
     builder.bold(false);
-    builder.line(justifyLine('Total Transaksi', `${report.totalTransactions} Trx`, maxChars));
-    builder.line(justifyLine('Total Item Terjual', `${report.totalItemsSold} Pcs`, maxChars));
-    builder.line(justifyLine('Rata-rata/Nota (AOV)', formatRupiah(report.averageOrderValue), maxChars));
-    builder.line(justifyLine('Total Diskon', formatRupiah(report.totalDiscounts), maxChars));
-    builder.line(justifyLine('Total Pajak', formatRupiah(report.totalTax), maxChars));
+    writeWrapped('Total Transaksi', `${report.totalTransactions} Trx`);
+    writeWrapped('Item Terjual', `${report.totalItemsSold} Pcs`);
+    writeWrapped('Rata-rata/Nota (AOV)', formatRupiah(report.averageOrderValue));
+    writeWrapped('Total Diskon', formatRupiah(report.totalDiscounts));
+    writeWrapped('Total Pajak', formatRupiah(report.totalTax));
     if (report.totalServiceCharge > 0) {
-      builder.line(justifyLine('Total Layanan', formatRupiah(report.totalServiceCharge), maxChars));
+      writeWrapped('Total Layanan', formatRupiah(report.totalServiceCharge));
     }
 
     builder.line(createSeparator('-', maxChars));
     builder.bold(true);
     builder.doubleHeight(true);
-    builder.line(justifyLine('TOTAL OMSET', formatRupiah(report.totalGrossSales), maxChars));
+    writeWrapped('TOTAL OMSET', formatRupiah(report.totalGrossSales));
     builder.doubleHeight(false);
     builder.bold(false);
     builder.line(createSeparator('=', maxChars));
 
     // Breakdown By Payment Method
     builder.bold(true);
-    builder.line('RINCIAN METODE PEMBAYARAN');
+    builder.line('RINCIAN PEMBAYARAN');
     builder.bold(false);
-    builder.line(
-      justifyLine(
-        `Tunai (${report.paymentBreakdown.cash.count}x)`,
-        formatRupiah(report.paymentBreakdown.cash.total),
-        maxChars
-      )
-    );
-    builder.line(
-      justifyLine(
-        `QRIS (${report.paymentBreakdown.qris.count}x)`,
-        formatRupiah(report.paymentBreakdown.qris.total),
-        maxChars
-      )
-    );
-    builder.line(
-      justifyLine(
-        `Transfer (${report.paymentBreakdown.transfer.count}x)`,
-        formatRupiah(report.paymentBreakdown.transfer.total),
-        maxChars
-      )
-    );
-    builder.line(
-      justifyLine(
-        `Debit/Kredit (${report.paymentBreakdown.debit.count + report.paymentBreakdown.credit.count}x)`,
-        formatRupiah(report.paymentBreakdown.debit.total + report.paymentBreakdown.credit.total),
-        maxChars
-      )
+    writeWrapped(`Tunai (${report.paymentBreakdown.cash.count}x)`, formatRupiah(report.paymentBreakdown.cash.total));
+    writeWrapped(`QRIS (${report.paymentBreakdown.qris.count}x)`, formatRupiah(report.paymentBreakdown.qris.total));
+    writeWrapped(`Transfer (${report.paymentBreakdown.transfer.count}x)`, formatRupiah(report.paymentBreakdown.transfer.total));
+    writeWrapped(
+      `Debit/Kredit (${report.paymentBreakdown.debit.count + report.paymentBreakdown.credit.count}x)`,
+      formatRupiah(report.paymentBreakdown.debit.total + report.paymentBreakdown.credit.total)
     );
 
     builder.line(createSeparator('-', maxChars));
 
     // Top Selling Products
     builder.bold(true);
-    builder.line('PRODUK TERLARIS (TOP SALES)');
+    builder.line('PRODUK TERLARIS');
     builder.bold(false);
     if (report.topProducts.length === 0) {
-      builder.line(centerText('Belum ada data', maxChars));
+      builder.line(centerText('Belum ada transaksi', maxChars));
     } else {
       report.topProducts.slice(0, 5).forEach((p, index) => {
-        const itemLine = `${index + 1}. ${p.name}`;
-        builder.line(justifyLine(itemLine, `${p.quantity}x | ${formatNumber(p.totalRevenue)}`, maxChars));
+        writeWrapped(`${index + 1}. ${p.name}`, `${p.quantity}x | ${formatNumber(p.totalRevenue)}`);
       });
     }
 
@@ -473,7 +630,7 @@ class BluetoothThermalPrinterManager {
     builder.alignCenter();
     builder.line('Tanda Tangan Penanggung Jawab');
     builder.feedLines(3);
-    builder.line('( .............................. )');
+    builder.line('( ........................ )');
     builder.line('Kasir / Supervisor Toko');
 
     builder.feedLines(3);
@@ -492,71 +649,91 @@ class BluetoothThermalPrinterManager {
     store: StoreProfile,
     config: PrinterConfig
   ): Uint8Array {
-    const maxChars = getLineCharLimit(config.paperWidth);
+    const maxChars = getLineCharLimit(config.paperWidth, config.customCharPerLine);
     const builder = new EscPosBuilder();
+
+    const writeWrapped = (left: string, right: string) => {
+      for (const ln of justifyWrappedLines(sanitizeThermalAscii(left), sanitizeThermalAscii(right), maxChars)) {
+        builder.line(ln);
+      }
+    };
 
     builder.init();
     builder.alignCenter();
     builder.bold(true);
     builder.doubleHeight(true);
-    builder.line('STRUK TUTUPAN KASIR');
+    for (const ln of wrapTextLines('STRUK TUTUPAN KASIR', maxChars)) {
+      builder.line(ln);
+    }
     builder.doubleHeight(false);
-    builder.line(store.storeName.toUpperCase());
+    for (const ln of wrapTextLines(store.storeName, maxChars)) {
+      builder.line(ln);
+    }
     builder.bold(false);
+    builder.alignLeft();
     builder.line(createSeparator('=', maxChars));
 
-    builder.alignLeft();
-    builder.line(justifyLine('No. Tutupan', `#${closing.id}`, maxChars));
-    builder.line(justifyLine('Tanggal Laporan', formatDateOnly(closing.date), maxChars));
-    builder.line(justifyLine('Waktu Tutup', formatDateTime(closing.closedAt), maxChars));
-    builder.line(justifyLine('Kasir', closing.cashierName, maxChars));
+    writeWrapped('No. Tutupan', `#${closing.id}`);
+    writeWrapped('Tgl Laporan', formatDateOnly(closing.date));
+    writeWrapped('Waktu Tutup', formatDateTime(closing.closedAt));
+    writeWrapped('Kasir', closing.cashierName);
     if (closing.shiftLabel) {
-      builder.line(justifyLine('Shift', closing.shiftLabel, maxChars));
+      writeWrapped('Shift', closing.shiftLabel);
     }
     builder.line(createSeparator('-', maxChars));
 
     builder.bold(true);
     builder.line('RINGKASAN PENJUALAN');
     builder.bold(false);
-    builder.line(justifyLine('Total Transaksi', `${closing.totalTransactions} Trx`, maxChars));
-    builder.line(justifyLine('Item Terjual', `${closing.totalItemsSold} Pcs`, maxChars));
-    builder.line(justifyLine('Total Diskon', formatRupiah(closing.totalDiscounts), maxChars));
-    builder.line(justifyLine('Total Omset', formatRupiah(closing.totalSales), maxChars));
-    builder.line(justifyLine('Non-Tunai (QRIS/TF/Card)', formatRupiah(closing.systemNonCashSales), maxChars));
+    writeWrapped('Total Transaksi', `${closing.totalTransactions} Trx`);
+    writeWrapped('Item Terjual', `${closing.totalItemsSold} Pcs`);
+    if (closing.totalDiscounts > 0) {
+      writeWrapped('Total Diskon', formatRupiah(closing.totalDiscounts));
+    }
+    writeWrapped('Total Omset', formatRupiah(closing.totalSales));
+    writeWrapped('Tunai Sistem', formatRupiah(closing.systemCashSales));
+    writeWrapped('QRIS', formatRupiah(closing.qrisSales));
+    writeWrapped('Transfer Bank', formatRupiah(closing.transferSales));
+    writeWrapped('Kartu Debit/Kredit', formatRupiah(closing.cardSales));
     builder.line(createSeparator('-', maxChars));
 
     builder.bold(true);
-    builder.line('REKONSILIASI KAS LACI');
+    builder.line('REKONSILIASI LACI KAS');
     builder.bold(false);
-    builder.line(justifyLine('Modal Awal Laci', formatRupiah(closing.openingCash), maxChars));
-    builder.line(justifyLine('Penjualan Tunai', formatRupiah(closing.systemCashSales), maxChars));
-    builder.line(justifyLine('Kas Keluar', `-${formatRupiah(closing.cashOut)}`, maxChars));
+    writeWrapped('Modal Awal Laci', formatRupiah(closing.openingCash));
+    writeWrapped('Penjualan Tunai', formatRupiah(closing.systemCashSales));
+    writeWrapped('Kas Keluar', `-${formatRupiah(closing.cashOut)}`);
     if (closing.cashOutNote) {
-      builder.line(`  Ket: ${closing.cashOutNote}`);
+      for (const nl of wrapTextLines(`  Ket: ${closing.cashOutNote}`, maxChars)) {
+        builder.line(nl);
+      }
     }
     builder.line(createSeparator('-', maxChars));
     builder.bold(true);
-    builder.line(justifyLine('Kas Seharusnya', formatRupiah(closing.expectedCash), maxChars));
-    builder.line(justifyLine('Kas Fisik Laci', formatRupiah(closing.actualCash), maxChars));
+    writeWrapped('Kas Seharusnya', formatRupiah(closing.expectedCash));
+    writeWrapped('Kas Fisik Laci', formatRupiah(closing.actualCash));
     const diffLabel =
       closing.cashDifference === 0
         ? 'Pas (Rp 0)'
         : closing.cashDifference > 0
           ? `+${formatRupiah(closing.cashDifference)}`
           : `-${formatRupiah(Math.abs(closing.cashDifference))}`;
-    builder.line(justifyLine('Selisih Kas', diffLabel, maxChars));
+    writeWrapped('Selisih Kas', diffLabel);
     builder.bold(false);
 
     if (closing.notes) {
       builder.line(createSeparator('-', maxChars));
-      builder.line(`Catatan: ${closing.notes}`);
+      for (const nl of wrapTextLines(`Catatan: ${closing.notes}`, maxChars)) {
+        builder.line(nl);
+      }
     }
 
     builder.line(createSeparator('=', maxChars));
     builder.alignCenter();
     builder.line('Tanda Tangan Kasir & Owner');
     builder.feedLines(3);
-    builder.line('( .............. )   ( .............. )');
+    builder.line(centerText('( .......... )  ( .......... )', maxChars));
+    builder.line(centerText('     Kasir          Owner     ', maxChars));
 
     builder.feedLines(3);
     if (config.autoCutPaper) {
@@ -567,14 +744,35 @@ class BluetoothThermalPrinterManager {
   }
 
   /**
+   * Async test print including the Store Logo bitmap if enabled
+   */
+  async generateTestBytesWithLogo(store: StoreProfile, config: PrinterConfig): Promise<Uint8Array> {
+    let logoRaster: number[] | null = null;
+    if (config.printStoreLogo && store.logoUrl) {
+      const maxWidth = config.paperWidth === '80mm' ? 240 : 184;
+      const maxHeight = config.paperWidth === '80mm' ? 160 : 128;
+      logoRaster = await this.imageToEscPosRaster(store.logoUrl, maxWidth, maxHeight);
+    }
+    return this.generateTestBytes(store, config, logoRaster);
+  }
+
+  /**
    * Generate raw ESC/POS bytes for a Test Print
    */
-  generateTestBytes(store: StoreProfile, config: PrinterConfig): Uint8Array {
-    const maxChars = getLineCharLimit(config.paperWidth);
+  generateTestBytes(
+    store: StoreProfile,
+    config: PrinterConfig,
+    logoRaster: number[] | null = null
+  ): Uint8Array {
+    const maxChars = getLineCharLimit(config.paperWidth, config.customCharPerLine);
     const builder = new EscPosBuilder();
 
     builder.init();
     builder.alignCenter();
+    if (logoRaster && logoRaster.length > 0) {
+      builder.rasterImage(logoRaster);
+      builder.line('');
+    }
     builder.bold(true);
     builder.doubleSize(true);
     builder.line('TEST CETAK BLUETOOTH');
@@ -624,10 +822,11 @@ class BluetoothThermalPrinterManager {
  */
 class EscPosBuilder {
   private buffer: number[] = [];
-  private encoder = new TextEncoder();
 
   init(): this {
-    this.buffer.push(0x1b, 0x40); // ESC @
+    this.buffer.push(0x1b, 0x40); // ESC @ - Initialize printer
+    this.buffer.push(0x1c, 0x2e); // FS .  - Cancel Chinese/Kanji double-byte mode
+    this.buffer.push(0x1b, 0x74, 0x00); // ESC t 0 - Select PC437 single-byte ASCII table
     return this;
   }
 
@@ -682,10 +881,17 @@ class EscPosBuilder {
   }
 
   line(text: string): this {
-    const cleanText = text.replace(/[\r\n]+/g, ' ');
-    const encoded = this.encoder.encode(cleanText + '\n');
-    for (let i = 0; i < encoded.length; i++) {
-      this.buffer.push(encoded[i]);
+    const cleanText = sanitizeThermalAscii(text).replace(/[\r\n]+/g, ' ');
+    for (let i = 0; i < cleanText.length; i++) {
+      this.buffer.push(cleanText.charCodeAt(i) & 0x7f);
+    }
+    this.buffer.push(0x0a); // LF
+    return this;
+  }
+
+  rasterImage(bytes: number[]): this {
+    for (let i = 0; i < bytes.length; i++) {
+      this.buffer.push(bytes[i]);
     }
     return this;
   }

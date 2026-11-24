@@ -57,6 +57,11 @@
     size: auto;
   }
 
+  @page thermal-receipt {
+    margin: 2mm;
+    size: auto;
+  }
+
   html,
   body,
   #root,
@@ -68,9 +73,16 @@
     color: #000 !important;
     margin: 0 !important;
     padding: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
 
-  body * {
+  /* When a thermal receipt portal is active, hide #root completely so modal overlays/heights never clip or add blank pages */
+  body.thermal-print-active #root {
+    display: none !important;
+  }
+
+  body:not(.thermal-print-active) * {
     visibility: hidden;
   }
 
@@ -84,24 +96,50 @@
   }
 
   #thermal-print-target {
-    position: absolute;
-    left: 0;
-    top: 0;
+    page: thermal-receipt;
+    display: block !important;
+    position: static !important;
     width: 100% !important;
-    max-width: 58mm; /* Defaults to 58mm in print, overridden if 80mm class is present */
-    margin: 0;
-    padding: 2mm !important;
-    font-family: 'JetBrains Mono', monospace !important;
-    font-size: 11px !important;
-    line-height: 1.25 !important;
+    max-width: 54mm !important; /* Fits 58mm thermal roll safely inside 2mm @page margin */
+    margin: 0 !important;
+    padding: 1.5mm !important;
+    box-sizing: border-box !important;
+    font-family: 'JetBrains Mono', 'Courier New', Courier, monospace !important;
     color: #000 !important;
     background: #fff !important;
     box-shadow: none !important;
+    border: none !important;
   }
 
   #thermal-print-target.paper-80mm {
-    max-width: 80mm !important;
-    font-size: 12px !important;
+    max-width: 76mm !important; /* Fits 80mm thermal roll safely inside 2mm @page margin */
+  }
+
+  #thermal-print-target .receipt-paper {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  #thermal-print-target img {
+    display: inline-block !important;
+    max-width: 100% !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    filter: none !important;
+    -webkit-filter: none !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  #thermal-print-target .receipt-cut-top,
+  #thermal-print-target .receipt-cut-bottom {
+    display: none !important;
   }
 
   #printable-tent-card {

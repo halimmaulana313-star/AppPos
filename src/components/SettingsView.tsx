@@ -9,15 +9,15 @@ import {
   Bluetooth,
   BluetoothConnected,
   BluetoothOff,
-  Check,
   CheckCircle2,
   Database,
   Download,
   Image as ImageIcon,
+  Pencil,
   QrCode,
+  Receipt,
   RotateCcw,
   Save,
-  Sparkles,
   Store,
   Trash2,
   Upload,
@@ -26,7 +26,6 @@ import {
 import { PrinterConfig, StoreProfile } from '../types/pos';
 import { BluetoothPrinterState } from '../utils/bluetoothThermalPrinter';
 import { getLocalDateString } from '../utils/formatters';
-import { PRESET_LOGOS } from '../utils/presetLogos';
 import { getStoreQrisImageDataUrl, optimizeLogoImageFile, optimizeQrisImageFile } from '../utils/qrCodeGenerator';
 import { safeJsonParse } from '../utils/sanitize';
 import { sounds } from '../utils/soundEffects';
@@ -49,26 +48,29 @@ interface SettingsViewProps {
   onImportData: (data: Record<string, unknown>) => void;
   onOpenLogoManager?: () => void;
   onQuickConnectBluetooth?: () => void;
+  onOpenReceiptEditor?: () => void;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   store,
   setStore,
   printerConfig,
+  setPrinterConfig,
   printerState,
   onOpenPrinterModal,
   onResetData,
   fullDataPayload,
   onImportData,
   onQuickConnectBluetooth,
+  onOpenReceiptEditor,
 }) => {
   const [formData, setFormData] = useState<StoreProfile>({ ...store });
   const [savedSuccess, setSavedSuccess] = useState(false);
-  const [showPresetPicker, setShowPresetPicker] = useState(false);
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
   const [backupFeedback, setBackupFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [previewStoreQrisUrl, setPreviewStoreQrisUrl] = useState<string>('');
   const [qrisSyncNote, setQrisSyncNote] = useState<string | null>(null);
+  const [logoSyncNote, setLogoSyncNote] = useState<string | null>(null);
 
   useEffect(() => {
     setFormData({ ...store });
@@ -309,6 +311,39 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </div>
 
+      {/* Receipt Wording Editor Shortcut Card (Master Only) */}
+      {onOpenReceiptEditor && (
+        <div className="bg-amber-50/70 rounded-2xl p-5 border border-amber-200/90 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="w-11 h-11 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+              <Receipt className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-bold text-slate-900 text-sm sm:text-base">
+                  Kustomisasi Kata-Kata & Label Struk
+                </h3>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 uppercase">
+                  Khusus Master
+                </span>
+              </div>
+              <p className="text-xs text-slate-600 mt-0.5">
+                Ubah kata header, sapaan pembuka, label subtotal/diskon/pajak/total, label pembayaran, hingga ucapan penutup dengan pratinjau langsung.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={onOpenReceiptEditor}
+            className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs sm:text-sm rounded-xl shadow-sm transition-all cursor-pointer active:scale-[0.98] shrink-0"
+          >
+            <Pencil className="w-4 h-4" />
+            <span>Edit Kata-Kata Struk</span>
+          </button>
+        </div>
+      )}
+
       {/* Store Profile Form */}
       <form onSubmit={handleSubmit} className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="p-5 border-b border-slate-200 bg-slate-50 flex items-center gap-2">
@@ -434,20 +469,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowPresetPicker(!showPresetPicker)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95"
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>{showPresetPicker ? 'Tutup Pilihan Preset' : 'Ganti Logo Usaha'}</span>
-                  </button>
-
                   {formData.logoUrl && (
                     <button
                       type="button"
                       onClick={() => {
-                        setFormData({ ...formData, logoUrl: undefined });
+                        setFormData((prev) => ({ ...prev, logoUrl: undefined }));
+                        setStore((prev) => ({ ...prev, logoUrl: undefined }));
+                        setLogoSyncNote('Logo usaha dihapus & disinkronkan ke struk.');
+                        setTimeout(() => setLogoSyncNote(null), 4000);
                         sounds.playItemBeep();
                       }}
                       className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-800 font-semibold p-1.5 hover:bg-rose-50 rounded-lg cursor-pointer transition-colors"
@@ -460,59 +489,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
-              {/* Presets Grid inside Pengaturan Toko */}
-              {showPresetPicker && (
-                <div className="p-3 bg-white rounded-xl border border-amber-200/90 space-y-3 animate-in fade-in slide-in-from-top-2">
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs font-bold text-slate-800">
-                      Pilih dari Koleksi Preset Logo Siap Pakai:
-                    </p>
-                    <span className="text-[10px] text-slate-400">8 Preset Vektor Tajam</span>
-                  </div>
+              {logoSyncNote && (
+                <div className="p-2.5 rounded-xl bg-emerald-100/80 border border-emerald-300 text-emerald-900 text-xs font-bold flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                  <span>{logoSyncNote}</span>
+                </div>
+              )}
 
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                    {PRESET_LOGOS.map((preset) => {
-                      const isSelected = formData.logoUrl === preset.dataUrl;
-                      return (
-                        <button
-                          key={preset.id}
-                          type="button"
-                          onClick={() => {
-                            setFormData({ ...formData, logoUrl: preset.dataUrl });
-                            sounds.playCashRegister();
-                          }}
-                          className={`p-2 rounded-xl border text-center transition-all flex flex-col items-center justify-between group cursor-pointer relative ${
-                            isSelected
-                              ? 'border-emerald-500 bg-emerald-50/60 ring-2 ring-emerald-500/30 shadow-xs'
-                              : 'border-slate-200 hover:border-amber-300 hover:bg-amber-50/30 bg-white'
-                          }`}
-                        >
-                          {isSelected && (
-                            <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-xs">
-                              <Check className="w-2.5 h-2.5 stroke-[3]" />
-                            </span>
-                          )}
-
-                          <div className="w-12 h-12 rounded-lg overflow-hidden p-0.5 bg-slate-50 border border-slate-100 flex items-center justify-center mb-1.5 group-hover:scale-105 transition-transform">
-                            <img
-                              src={preset.dataUrl}
-                              alt={preset.name}
-                              className="w-full h-full object-contain"
-                            />
-                          </div>
-
-                          <div className="w-full">
-                            <p className="text-[11px] font-bold text-slate-800 truncate leading-tight">
-                              {preset.name}
-                            </p>
-                            <span className="text-[9px] text-slate-400 block truncate mt-0.5">
-                              {preset.category}
-                            </span>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
+              {formData.logoUrl && !printerConfig.printStoreLogo && (
+                <div className="p-2.5 rounded-xl bg-amber-100/80 border border-amber-300 text-amber-900 text-xs flex items-center justify-between gap-2">
+                  <span>Opsi cetak logo di struk sedang nonaktif di pengaturan printer.</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPrinterConfig((prev) => ({ ...prev, printStoreLogo: true }));
+                      setLogoSyncNote('Cetak logo pada struk pembayaran diaktifkan!');
+                      setTimeout(() => setLogoSyncNote(null), 4000);
+                      sounds.playItemBeep();
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-amber-700 hover:bg-amber-800 text-white font-bold text-[11px] shrink-0 cursor-pointer"
+                  >
+                    Aktifkan Cetak Logo
+                  </button>
                 </div>
               )}
 
@@ -544,6 +542,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                           void optimizeLogoImageFile(file)
                             .then((logoDataUrl) => {
                               setFormData((prev) => ({ ...prev, logoUrl: logoDataUrl }));
+                              setStore((prev) => ({ ...prev, logoUrl: logoDataUrl }));
+                              setPrinterConfig((prev) =>
+                                prev.printStoreLogo ? prev : { ...prev, printStoreLogo: true }
+                              );
+                              setLogoSyncNote('Logo usaha berhasil disimpan & langsung aktif di struk!');
+                              setTimeout(() => setLogoSyncNote(null), 5000);
                               sounds.playCashRegister();
                             })
                             .catch((err) => {
@@ -561,7 +565,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     />
                   </label>
                   <p className="text-[10px] text-slate-400 mt-1">
-                    Format file: PNG, JPG, WebP maks. 3MB (atau pilih 8 Preset Vektor di atas)
+                    Format file: PNG, JPG, WebP maks. 40MB • Otomatis disinkronkan ke struk
                   </p>
                 </div>
               </div>

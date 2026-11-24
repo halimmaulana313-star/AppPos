@@ -92,6 +92,32 @@ service cloud.firestore {
         (!('lastLoginAt' in data) || data.lastLoginAt is timestamp);
     }
 
+    function isValidReceiptTexts(rt) {
+      return rt is map &&
+        rt.keys().hasOnly([
+          'headerNote', 'phoneLabel', 'receiptNumberLabel', 'dateLabel',
+          'cashierLabel', 'customerLabel', 'subtotalLabel', 'discountLabel',
+          'taxLabel', 'serviceLabel', 'totalLabel', 'paymentMethodLabel',
+          'amountPaidLabel', 'changeLabel', 'wifiLabel', 'wifiPasswordLabel'
+        ]) &&
+        isOptionalString(rt, 'headerNote', 200) &&
+        isOptionalString(rt, 'phoneLabel', 30) &&
+        isOptionalString(rt, 'receiptNumberLabel', 30) &&
+        isOptionalString(rt, 'dateLabel', 30) &&
+        isOptionalString(rt, 'cashierLabel', 30) &&
+        isOptionalString(rt, 'customerLabel', 30) &&
+        isOptionalString(rt, 'subtotalLabel', 40) &&
+        isOptionalString(rt, 'discountLabel', 40) &&
+        isOptionalString(rt, 'taxLabel', 40) &&
+        isOptionalString(rt, 'serviceLabel', 40) &&
+        isOptionalString(rt, 'totalLabel', 40) &&
+        isOptionalString(rt, 'paymentMethodLabel', 40) &&
+        isOptionalString(rt, 'amountPaidLabel', 40) &&
+        isOptionalString(rt, 'changeLabel', 40) &&
+        isOptionalString(rt, 'wifiLabel', 30) &&
+        isOptionalString(rt, 'wifiPasswordLabel', 30);
+    }
+
     function isValidStoreProfile(data) {
       return data.keys().hasAll([
           'id', 'ownerUid', 'staffUids', 'storeName', 'tagline', 'address',
@@ -105,7 +131,7 @@ service cloud.firestore {
           'logoUrl', 'qrisImageUrl', 'qrisMerchantName', 'qrisNmid',
           'enableTax', 'taxPercentage', 'enableServiceCharge',
           'serviceChargePercentage', 'lowStockThreshold', 'currency',
-          'createdAt', 'updatedAt'
+          'receiptTexts', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.id) && data.id.size() <= 64 &&
         isValidId(data.ownerUid) &&
@@ -128,6 +154,7 @@ service cloud.firestore {
         data.serviceChargePercentage is number && data.serviceChargePercentage >= 0 && data.serviceChargePercentage <= 100 &&
         isOptionalNumber(data, 'lowStockThreshold', 0, 10000) &&
         data.currency is string && data.currency.size() >= 1 && data.currency.size() <= 10 &&
+        (!('receiptTexts' in data) || isValidReceiptTexts(data.receiptTexts)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -366,7 +393,7 @@ service cloud.firestore {
           'logoUrl', 'qrisImageUrl', 'qrisMerchantName', 'qrisNmid',
           'enableTax', 'taxPercentage', 'enableServiceCharge',
           'serviceChargePercentage', 'lowStockThreshold', 'currency',
-          'updatedAt'
+          'receiptTexts', 'updatedAt'
         ]) &&
         (existing().ownerUid == request.auth.uid || isAdmin());
       allow delete: if false;

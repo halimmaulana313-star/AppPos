@@ -38,7 +38,7 @@ import {
   StoreProfile,
   UserRole,
 } from '../types/pos';
-import { sanitizeSafeImageUrl } from '../utils/sanitize';
+import { sanitizeReceiptTexts, sanitizeSafeImageUrl } from '../utils/sanitize';
 import { OperationType, auth, db, firebaseConfig, handleFirestoreError } from './firebase';
 
 export const BOOTSTRAP_ADMIN_EMAILS = [
@@ -351,6 +351,7 @@ export async function upsertStoreInFirestore(
   const wifiPassword = optionalClipString(store.wifiPassword, 80);
   const qrisMerchantName = optionalClipString(store.qrisMerchantName, 120);
   const qrisNmid = optionalClipString(store.qrisNmid, 80);
+  const receiptTexts = sanitizeReceiptTexts(store.receiptTexts);
 
   const fields: Record<string, unknown> = {
     staffUids: mergedStaff,
@@ -365,6 +366,7 @@ export async function upsertStoreInFirestore(
     serviceChargePercentage: clampNumber(store.serviceChargePercentage, 0, 100, 0),
     lowStockThreshold: clampNumber(store.lowStockThreshold, 0, 10000, 10),
     currency: clipString(store.currency || 'IDR', 10),
+    receiptTexts: receiptTexts ?? {},
     updatedAt: serverTimestamp(),
   };
 
@@ -388,8 +390,16 @@ export async function upsertStoreInFirestore(
       handleFirestoreError(err, OperationType.CREATE, path);
     }
   } else {
+    const existingData = existingSnap.data();
+    const updatePayload: Record<string, unknown> = { ...fields };
+    if (logoUrl === undefined && existingData.logoUrl !== undefined) {
+      updatePayload.logoUrl = deleteField();
+    }
+    if (qrisImageUrl === undefined && existingData.qrisImageUrl !== undefined) {
+      updatePayload.qrisImageUrl = deleteField();
+    }
     try {
-      await updateDoc(storeRef, fields);
+      await updateDoc(storeRef, updatePayload);
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, path);
     }
@@ -671,6 +681,7 @@ export function subscribeStoreProfile(
           serviceChargePercentage: d.serviceChargePercentage,
           lowStockThreshold: d.lowStockThreshold,
           currency: d.currency,
+          receiptTexts: sanitizeReceiptTexts(d.receiptTexts),
         });
       },
       (error) => {
@@ -706,6 +717,7 @@ export function subscribeStoreProfile(
         serviceChargePercentage: d.serviceChargePercentage,
         lowStockThreshold: d.lowStockThreshold,
         currency: d.currency,
+        receiptTexts: sanitizeReceiptTexts(d.receiptTexts),
       });
     },
     (error) => {

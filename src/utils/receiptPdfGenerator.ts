@@ -9,8 +9,12 @@ import {
   formatDateOnly,
   formatDateTime,
   formatNumber,
+  formatOrderTypeLabel,
+  formatPaymentMethodLabel,
   formatRupiah,
+  formatShortDate,
   formatTimeOnly,
+  resolveReceiptTexts,
 } from './formatters';
 import { sanitizeFilename, sanitizeSafeImageUrl } from './sanitize';
 
@@ -96,6 +100,8 @@ export async function generateOrderReceiptPDF(
     return measureDoc.splitTextToSize(text, maxW) as string[];
   };
 
+  const rt = resolveReceiptTexts(store);
+
   // Calculate dynamic height accurately
   let estY = 6;
   if (logoPng) estY += 15;
@@ -103,10 +109,11 @@ export async function generateOrderReceiptPDF(
   if (store.tagline) estY += wrap(store.tagline, contentWidth, baseFontSize - 0.5).length * lineH;
   if (store.address) estY += wrap(store.address, contentWidth, baseFontSize - 1).length * (lineH - 0.3);
   if (store.phone) estY += lineH;
+  if (rt.headerNote) estY += wrap(rt.headerNote, contentWidth, baseFontSize - 0.8).length * lineH;
   estY += 5; // divider + gap
 
   estY += lineH * 2; // No/Time + Date/Cashier
-  if (order.customerName || order.tableNumber || order.orderType === 'takeaway') estY += lineH;
+  if (order.customerName || order.tableNumber || order.orderType !== 'dine_in') estY += lineH;
   estY += 4; // divider
 
   for (const item of order.items) {
@@ -129,7 +136,7 @@ export async function generateOrderReceiptPDF(
   estY += 5; // divider
 
   if (printerConfig.printWifiInfo && store.wifiName) {
-    estY += wrap(`WiFi: ${store.wifiName} | Pass: ${store.wifiPassword || '-'}`, contentWidth, baseFontSize - 0.8).length * lineH;
+    estY += wrap(`${rt.wifiLabel}: ${store.wifiName} | ${rt.wifiPasswordLabel}: ${store.wifiPassword || '-'}`, contentWidth, baseFontSize - 0.8).length * lineH;
   }
   if (printerConfig.printFooterNote && store.footerNote) {
     store.footerNote.split('\n').forEach((fn) => {
@@ -217,8 +224,19 @@ export async function generateOrderReceiptPDF(
   if (store.phone) {
     doc.setFont('courier', 'normal');
     doc.setFontSize(baseFontSize - 1);
-    doc.text(`Telp: ${store.phone}`, centerX, y, { align: 'center' });
+    doc.text(`${rt.phoneLabel}: ${store.phone}`, centerX, y, { align: 'center' });
     y += lineH;
+  }
+
+  if (rt.headerNote) {
+    doc.setFont('courier', 'italic');
+    doc.setFontSize(baseFontSize - 0.8);
+    doc.setTextColor(71, 85, 105);
+    const hnLines = doc.splitTextToSize(rt.headerNote, contentWidth) as string[];
+    hnLines.forEach((ln) => {
+      doc.text(ln, centerX, y, { align: 'center' });
+      y += lineH - 0.3;
+    });
   }
 
   y += 1;
@@ -226,13 +244,13 @@ export async function generateOrderReceiptPDF(
 
   // Order Metadata
   doc.setTextColor(30, 41, 59);
-  drawRow(`No: #${order.id}`, formatTimeOnly(order.timestamp), false, baseFontSize - 0.5);
-  drawRow(`Tgl: ${formatDateOnly(order.timestamp)}`, `Kasir: ${order.cashierName}`, false, baseFontSize - 0.5);
+  drawRow(`${rt.receiptNumberLabel}: #${order.id}`, formatTimeOnly(order.timestamp), false, baseFontSize - 0.5);
+  drawRow(`${rt.dateLabel}: ${formatShortDate(order.timestamp)}`, `${rt.cashierLabel}: ${order.cashierName}`, false, baseFontSize - 0.5);
 
-  if (order.customerName || order.tableNumber || order.orderType === 'takeaway') {
+  if (order.customerName || order.tableNumber || order.orderType !== 'dine_in') {
     drawRow(
-      order.customerName ? `Plg: ${order.customerName}` : 'Plg: Walk-In',
-      order.tableNumber ? `Meja: ${order.tableNumber}` : order.orderType === 'takeaway' ? 'Bungkus' : 'Dine-In',
+      `${rt.customerLabel}: ${order.customerName || '-'}`,
+      formatOrderTypeLabel(order.orderType, order.tableNumber),
       false,
       baseFontSize - 0.5
     );
@@ -281,25 +299,25 @@ export async function generateOrderReceiptPDF(
 
   // Totals
   doc.setTextColor(51, 65, 85);
-  drawRow('Subtotal', formatRupiah(order.subtotal), false, baseFontSize - 0.3);
+  drawRow(rt.subtotalLabel, formatRupiah(order.subtotal), false, baseFontSize - 0.3);
 
   if (order.discount > 0) {
     const pct =
       order.discountPercent ??
       (order.subtotal > 0 ? Math.round((order.discount / order.subtotal) * 100) : 0);
-    const discLabel = pct > 0 ? `Diskon Nota (${pct}%)` : 'Diskon Nota';
+    const discLabel = pct > 0 ? `${rt.discountLabel} (${pct}%)` : rt.discountLabel;
     doc.setTextColor(5, 150, 105);
     drawRow(discLabel, `-${formatRupiah(order.discount)}`, true, baseFontSize - 0.3);
     doc.setTextColor(51, 65, 85);
   }
 
   if (order.taxAmount > 0) {
-    drawRow(`Pajak (${Math.round(order.taxRate * 100)}%)`, formatRupiah(order.taxAmount), false, baseFontSize - 0.3);
+    drawRow(`${rt.taxLabel} (${Math.round(order.taxRate * 100)}%)`, formatRupiah(order.taxAmount), false, baseFontSize - 0.3);
   }
 
   if (order.serviceChargeAmount > 0) {
     drawRow(
-      `Biaya Layanan (${Math.round(order.serviceChargeRate * 100)}%)`,
+      `${rt.serviceLabel} (${Math.round(order.serviceChargeRate * 100)}%)`,
       formatRupiah(order.serviceChargeAmount),
       false,
       baseFontSize - 0.3
@@ -311,29 +329,22 @@ export async function generateOrderReceiptPDF(
 
   // Grand Total
   doc.setTextColor(15, 23, 42);
-  drawRow('TOTAL', formatRupiah(order.total), true, baseFontSize + 2);
+  drawRow(rt.totalLabel, formatRupiah(order.total), true, baseFontSize + 2);
   y += 0.5;
   drawDashedLine();
 
   // Payment Method Details
-  const methodLabels: Record<string, string> = {
-    cash: 'TUNAI',
-    qris: 'QRIS',
-    transfer: 'TRANSFER',
-    debit: 'DEBIT',
-    credit: 'KREDIT',
-  };
   doc.setTextColor(51, 65, 85);
   drawRow(
-    'Metode Bayar',
-    methodLabels[order.paymentMethod] || order.paymentMethod.toUpperCase(),
+    rt.paymentMethodLabel,
+    formatPaymentMethodLabel(order.paymentMethod),
     true,
     baseFontSize - 0.3
   );
 
   if (order.paymentMethod === 'cash') {
-    drawRow('Nominal Bayar', formatRupiah(order.amountPaid), false, baseFontSize - 0.3);
-    drawRow('Kembalian', formatRupiah(order.change), true, baseFontSize - 0.3);
+    drawRow(rt.amountPaidLabel, formatRupiah(order.amountPaid), false, baseFontSize - 0.3);
+    drawRow(rt.changeLabel, formatRupiah(order.change), true, baseFontSize - 0.3);
   }
 
   y += 0.5;
@@ -346,7 +357,7 @@ export async function generateOrderReceiptPDF(
 
   if (printerConfig.printWifiInfo && store.wifiName) {
     const wifiLines = doc.splitTextToSize(
-      `WiFi: ${store.wifiName} | Pass: ${store.wifiPassword || '-'}`,
+      `${rt.wifiLabel}: ${store.wifiName} | ${rt.wifiPasswordLabel}: ${store.wifiPassword || '-'}`,
       contentWidth
     ) as string[];
     wifiLines.forEach((ln) => {
@@ -496,8 +507,11 @@ export async function generateDailyReportReceiptPDF(
     y += lineH;
   } else {
     report.topProducts.slice(0, 5).forEach((p, idx) => {
-      const name = `${idx + 1}. ${p.name}`.slice(0, is80mm ? 28 : 19);
-      drawRow(name, `${p.quantity}x`);
+      const rightStr = `${p.quantity}x | ${formatNumber(p.totalRevenue)}`;
+      const maxNameChars = is80mm ? 24 : 15;
+      const rawName = `${idx + 1}. ${p.name}`;
+      const name = rawName.length > maxNameChars ? `${rawName.slice(0, maxNameChars - 1)}…` : rawName;
+      drawRow(name, rightStr);
     });
   }
 

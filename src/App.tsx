@@ -16,6 +16,7 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 import { PaymentModal } from './components/PaymentModal';
 import { PrinterSettingsModal } from './components/PrinterSettingsModal';
 import { ProductManagementView } from './components/ProductManagementView';
+import { ReceiptEditorModal } from './components/ReceiptEditorModal';
 import { ReceiptModal } from './components/ReceiptModal';
 import { ReportReceiptModal } from './components/ReportReceiptModal';
 import { SettingsView } from './components/SettingsView';
@@ -256,6 +257,7 @@ export default function App() {
   const [isClosingReceiptModalOpen, setIsClosingReceiptModalOpen] = useState(false);
   const [closingInitialDate, setClosingInitialDate] = useState<string | undefined>(undefined);
   const [isPrinterModalOpen, setIsPrinterModalOpen] = useState(false);
+  const [isReceiptEditorOpen, setIsReceiptEditorOpen] = useState(false);
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
     try {
@@ -366,8 +368,8 @@ export default function App() {
                 {
                   ...prev,
                   ...remoteStoreFields,
-                  logoUrl: remoteStoreFields.logoUrl ?? prev.logoUrl,
-                  qrisImageUrl: remoteStoreFields.qrisImageUrl ?? prev.qrisImageUrl,
+                  logoUrl: remoteStoreFields.logoUrl,
+                  qrisImageUrl: remoteStoreFields.qrisImageUrl,
                 },
                 DEFAULT_STORE_PROFILE
               )
@@ -713,7 +715,12 @@ export default function App() {
       // Auto-print to Bluetooth if requested and printer connected
       if (details.shouldAutoPrint && printerState.isConnected) {
         try {
-          const bytes = bluetoothPrinter.generateReceiptBytes(newOrder, store, printerConfig);
+          const activeStore = latestStoreRef.current;
+          const bytes = await bluetoothPrinter.generateReceiptBytesWithLogo(
+            newOrder,
+            activeStore,
+            printerConfig
+          );
           await bluetoothPrinter.sendRawData(bytes);
           sounds.playThermalTick();
         } catch {
@@ -1060,6 +1067,7 @@ export default function App() {
               onImportData={handleImportData}
               onOpenLogoManager={() => setActiveTab('logo')}
               onQuickConnectBluetooth={handleQuickConnect}
+              onOpenReceiptEditor={() => setIsReceiptEditorOpen(true)}
             />
           )}
         </main>
@@ -1101,6 +1109,20 @@ export default function App() {
         printerConfig={printerConfig}
         printerState={printerState}
         onOpenPrinterModal={() => setIsPrinterModalOpen(true)}
+        isMaster={isMaster}
+        onOpenReceiptEditor={() => setIsReceiptEditorOpen(true)}
+      />
+
+      {/* Master Receipt Wording Editor Modal */}
+      <ReceiptEditorModal
+        isOpen={isReceiptEditorOpen}
+        onClose={() => setIsReceiptEditorOpen(false)}
+        store={store}
+        setStore={setStore}
+        printerConfig={printerConfig}
+        setPrinterConfig={setPrinterConfig}
+        previewOrder={isReceiptModalOpen ? receiptOrder : null}
+        isMaster={isMaster}
       />
 
       {/* Daily Sales Report Thermal Receipt (Z-Report) Modal */}

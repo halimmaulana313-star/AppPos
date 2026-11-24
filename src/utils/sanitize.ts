@@ -10,6 +10,7 @@ import {
   PaymentMethod,
   PrinterConfig,
   Product,
+  ReceiptCustomTexts,
   StoreProfile,
 } from '../types/pos';
 import { PRESET_LOGOS } from './presetLogos';
@@ -139,12 +140,45 @@ function clampFinite(val: unknown, min: number, max: number, fallback: number): 
   return Math.min(max, Math.max(min, num));
 }
 
+export function sanitizeReceiptTexts(raw: unknown): ReceiptCustomTexts | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const r = raw as Record<string, unknown>;
+  const out: ReceiptCustomTexts = {};
+
+  const assign = (key: keyof ReceiptCustomTexts, maxLen: number) => {
+    const val = clipOptionalText(r[key], maxLen);
+    if (val !== undefined) {
+      out[key] = val;
+    }
+  };
+
+  assign('headerNote', 200);
+  assign('phoneLabel', 30);
+  assign('receiptNumberLabel', 30);
+  assign('dateLabel', 30);
+  assign('cashierLabel', 30);
+  assign('customerLabel', 30);
+  assign('subtotalLabel', 40);
+  assign('discountLabel', 40);
+  assign('taxLabel', 40);
+  assign('serviceLabel', 40);
+  assign('totalLabel', 40);
+  assign('paymentMethodLabel', 40);
+  assign('amountPaidLabel', 40);
+  assign('changeLabel', 40);
+  assign('wifiLabel', 30);
+  assign('wifiPasswordLabel', 30);
+
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 export function sanitizeStoreProfile(
   raw: unknown,
   fallback: StoreProfile
 ): StoreProfile {
   if (!raw || typeof raw !== 'object') return fallback;
   const d = raw as Record<string, unknown>;
+  const receiptTexts = sanitizeReceiptTexts(d.receiptTexts);
   return {
     storeName: clipText(d.storeName, 120, fallback.storeName),
     tagline: clipText(d.tagline, 200, ''),
@@ -174,6 +208,7 @@ export function sanitizeStoreProfile(
       clampFinite(d.lowStockThreshold, 1, 500, fallback.lowStockThreshold ?? 10)
     ),
     currency: clipText(d.currency, 10, 'IDR'),
+    receiptTexts,
   };
 }
 

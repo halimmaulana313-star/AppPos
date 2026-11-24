@@ -103,13 +103,18 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
   'image/webp',
 ]);
 const MAX_IMAGE_FILE_BYTES = 3 * 1024 * 1024;
+const MAX_LOGO_FILE_BYTES = 40 * 1024 * 1024;
 
-function validateUploadedRasterFile(file: File): void {
+function validateUploadedRasterFile(
+  file: File,
+  maxBytes: number = MAX_IMAGE_FILE_BYTES
+): void {
   if (!ALLOWED_IMAGE_MIME_TYPES.has(file.type.toLowerCase())) {
     throw new Error('Format file harus PNG, JPG, atau WebP.');
   }
-  if (file.size <= 0 || file.size > MAX_IMAGE_FILE_BYTES) {
-    throw new Error('Ukuran gambar tidak valid atau melebihi batas 3MB.');
+  const maxMb = Math.round(maxBytes / (1024 * 1024));
+  if (file.size <= 0 || file.size > maxBytes) {
+    throw new Error(`Ukuran gambar tidak valid atau melebihi batas ${maxMb}MB.`);
   }
 }
 
@@ -205,52 +210,95 @@ export async function optimizeQrisImageFile(
 }
 
 /**
- * Validate & re-encode an uploaded store logo image through canvas (stripping EXIF/scripts).
+ * Validate & re-encode an uploaded store logo image (up to 40MB) through canvas
+ * (stripping EXIF/scripts and compressing within Firestore 350KB limit).
  */
 export async function optimizeLogoImageFile(
   file: File,
   maxDimension: number = 512
 ): Promise<string> {
-  validateUploadedRasterFile(file);
-  const rawDataUrl = await readFileAsDataUrl(file);
+  validateUploadedRasterFile(file, MAX_LOGO_FILE_BYTES);
+  const maxDataUrlLen = 340_000;
+
+  const objectUrl =
+    typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function'
+      ? URL.createObjectURL(file)
+      : null;
+  const imgSrc = objectUrl || (await readFileAsDataUrl(file));
 
   return new Promise<string>((resolve, reject) => {
+    const cleanup = () => {
+      if (objectUrl) {
+        try {
+          URL.revokeObjectURL(objectUrl);
+        } catch {
+          // ignore
+        }
+      }
+    };
+
     const img = new Image();
     img.onload = () => {
+      cleanup();
       try {
         if (!img.width || !img.height) {
           reject(new Error('File logo rusak atau berdimensi 0.'));
           return;
         }
-        const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
-        const targetW = Math.max(1, Math.round(img.width * scale));
-        const targetH = Math.max(1, Math.round(img.height * scale));
-        const canvas = document.createElement('canvas');
-        canvas.width = targetW;
-        canvas.height = targetH;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          reject(new Error('Canvas browser tidak tersedia untuk memproses logo.'));
-          return;
+
+        const renderCandidate = (
+          dim: number,
+          mime: 'image/png' | 'image/webp' | 'image/jpeg',
+          quality?: number
+        ) => {
+          const scale = Math.min(1, dim / Math.max(img.width, img.height));
+          const targetW = Math.max(1, Math.round(img.width * scale));
+          const targetH = Math.max(1, Math.round(img.height * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = targetW;
+          canvas.height = targetH;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return null;
+          if (mime === 'image/jpeg') {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, targetW, targetH);
+          }
+          ctx.drawImage(img, 0, 0, targetW, targetH);
+          return quality !== undefined ? canvas.toDataURL(mime, quality) : canvas.toDataURL(mime);
+        };
+
+        const attempts: Array<{
+          dim: number;
+          mime: 'image/png' | 'image/webp' | 'image/jpeg';
+          q?: number;
+        }> = [
+          { dim: maxDimension, mime: 'image/png' },
+          { dim: maxDimension, mime: 'image/webp', q: 0.85 },
+          { dim: maxDimension, mime: 'image/webp', q: 0.72 },
+          { dim: maxDimension, mime: 'image/jpeg', q: 0.85 },
+          { dim: 384, mime: 'image/webp', q: 0.75 },
+          { dim: 384, mime: 'image/jpeg', q: 0.75 },
+          { dim: 256, mime: 'image/jpeg', q: 0.65 },
+        ];
+
+        for (const attempt of attempts) {
+          const url = renderCandidate(attempt.dim, attempt.mime, attempt.q);
+          if (url && url.startsWith(`data:${attempt.mime}`) && url.length <= maxDataUrlLen) {
+            resolve(url);
+            return;
+          }
         }
-        ctx.drawImage(img, 0, 0, targetW, targetH);
-        const pngUrl = canvas.toDataURL('image/png');
-        if (pngUrl.length <= 340_000) {
-          resolve(pngUrl);
-          return;
-        }
-        const webpUrl = canvas.toDataURL('image/webp', 0.85);
-        if (webpUrl.startsWith('data:image/webp') && webpUrl.length <= 340_000) {
-          resolve(webpUrl);
-          return;
-        }
-        resolve(canvas.toDataURL('image/jpeg', 0.85));
+
+        reject(new Error('Ukuran gambar logo setelah kompresi masih terlalu besar. Pilih foto lain.'));
       } catch {
         reject(new Error('Gagal memproses gambar logo.'));
       }
     };
-    img.onerror = () => reject(new Error('File bukan gambar PNG/JPG/WebP yang valid.'));
-    img.src = rawDataUrl;
+    img.onerror = () => {
+      cleanup();
+      reject(new Error('File bukan gambar PNG/JPG/WebP yang valid.'));
+    };
+    img.src = imgSrc;
   });
 }
 

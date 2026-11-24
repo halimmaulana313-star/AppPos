@@ -85,7 +85,7 @@ export const PrinterSettingsModal: React.FC<PrinterSettingsModalProps> = ({
 
     try {
       if (printerState.isConnected) {
-        const bytes = bluetoothPrinter.generateTestBytes(store, printerConfig);
+        const bytes = await bluetoothPrinter.generateTestBytesWithLogo(store, printerConfig);
         await bluetoothPrinter.sendRawData(bytes);
         sounds.playThermalTick();
         setFeedback({
@@ -244,7 +244,9 @@ export const PrinterSettingsModal: React.FC<PrinterSettingsModalProps> = ({
             </label>
             <div className="grid grid-cols-2 gap-3">
               <div
-                onClick={() => setPrinterConfig((prev) => ({ ...prev, paperWidth: '58mm' }))}
+                onClick={() =>
+                  setPrinterConfig((prev) => ({ ...prev, paperWidth: '58mm', customCharPerLine: 32 }))
+                }
                 className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
                   printerConfig.paperWidth === '58mm'
                     ? 'border-emerald-600 bg-emerald-50/50 ring-2 ring-emerald-500/20'
@@ -261,7 +263,9 @@ export const PrinterSettingsModal: React.FC<PrinterSettingsModalProps> = ({
               </div>
 
               <div
-                onClick={() => setPrinterConfig((prev) => ({ ...prev, paperWidth: '80mm' }))}
+                onClick={() =>
+                  setPrinterConfig((prev) => ({ ...prev, paperWidth: '80mm', customCharPerLine: 48 }))
+                }
                 className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
                   printerConfig.paperWidth === '80mm'
                     ? 'border-emerald-600 bg-emerald-50/50 ring-2 ring-emerald-500/20'
@@ -276,6 +280,33 @@ export const PrinterSettingsModal: React.FC<PrinterSettingsModalProps> = ({
                   Untuk printer kasir desktop besar restoran atau mini market dengan ruang cetak lebih luas.
                 </p>
               </div>
+            </div>
+
+            {/* Fine-tune character columns per line */}
+            <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-semibold text-slate-800">Jumlah Karakter per Baris (Bluetooth)</p>
+                <p className="text-[11px] text-slate-500">
+                  Pilih 30 jika tepi struk terpotong, atau 32 untuk kertas 58mm standar.
+                </p>
+              </div>
+              <select
+                value={
+                  printerConfig.customCharPerLine ?? (printerConfig.paperWidth === '80mm' ? 48 : 32)
+                }
+                onChange={(e) =>
+                  setPrinterConfig((prev) => ({
+                    ...prev,
+                    customCharPerLine: Number(e.target.value),
+                  }))
+                }
+                className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                <option value={30}>30 Kolom (58mm Rapat)</option>
+                <option value={32}>32 Kolom (58mm Standar)</option>
+                <option value={42}>42 Kolom (80mm Rapat)</option>
+                <option value={48}>48 Kolom (80mm Standar)</option>
+              </select>
             </div>
           </div>
 
@@ -292,6 +323,18 @@ export const PrinterSettingsModal: React.FC<PrinterSettingsModalProps> = ({
                   checked={printerConfig.autoPrintOnPayment}
                   onChange={(e) =>
                     setPrinterConfig((prev) => ({ ...prev, autoPrintOnPayment: e.target.checked }))
+                  }
+                  className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
+                />
+              </label>
+
+              <label className="flex items-center justify-between cursor-pointer py-1 border-t border-slate-200/60">
+                <span>Cetak logo usaha di bagian atas struk</span>
+                <input
+                  type="checkbox"
+                  checked={printerConfig.printStoreLogo}
+                  onChange={(e) =>
+                    setPrinterConfig((prev) => ({ ...prev, printStoreLogo: e.target.checked }))
                   }
                   className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
                 />

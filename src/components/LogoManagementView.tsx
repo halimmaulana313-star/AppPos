@@ -75,9 +75,9 @@ export const LogoManagementView: React.FC<LogoManagementViewProps> = ({
       return;
     }
 
-    // Limit to 3MB for base64 storage
-    if (file.size > 3 * 1024 * 1024) {
-      setErrorMessage('Ukuran gambar terlalu besar. Maksimal 3MB agar performa tetap cepat.');
+    // Limit to 40MB before canvas optimization
+    if (file.size > 40 * 1024 * 1024) {
+      setErrorMessage('Ukuran gambar terlalu besar. Maksimal 40MB.');
       sounds.playError();
       return;
     }
@@ -227,7 +227,7 @@ export const LogoManagementView: React.FC<LogoManagementViewProps> = ({
                       Klik untuk memilih logo atau seret gambar ke sini
                     </p>
                     <p className="text-xs text-slate-400 mt-1">
-                      Mendukung format PNG, JPG, WebP (Rekomendasi: rasio 1:1 / persegi, maks. 3MB)
+                      Mendukung format PNG, JPG, WebP (Rekomendasi: rasio 1:1 / persegi, maks. 40MB)
                     </p>
 
                     <button

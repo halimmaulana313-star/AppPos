@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   AlertCircle,
   Bluetooth,
@@ -11,6 +12,7 @@ import {
   CheckCircle2,
   Copy,
   FileText,
+  Pencil,
   Play,
   Printer,
   RotateCw,
@@ -22,12 +24,16 @@ import {
   centerText,
   copyTextToClipboard,
   createSeparator,
-  formatDateOnly,
   formatNumber,
+  formatOrderTypeLabel,
+  formatPaymentMethodLabel,
   formatRupiah,
+  formatShortDate,
   formatTimeOnly,
   getLineCharLimit,
-  justifyLine,
+  justifyWrappedLines,
+  resolveReceiptTexts,
+  wrapTextLines,
 } from '../utils/formatters';
 import { generateOrderReceiptPDF } from '../utils/receiptPdfGenerator';
 import { sounds } from '../utils/soundEffects';
@@ -40,6 +46,8 @@ interface ReceiptModalProps {
   printerConfig: PrinterConfig;
   printerState: BluetoothPrinterState;
   onOpenPrinterModal: () => void;
+  isMaster?: boolean;
+  onOpenReceiptEditor?: () => void;
 }
 
 export const ReceiptModal: React.FC<ReceiptModalProps> = ({
@@ -50,6 +58,8 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   printerConfig,
   printerState,
   onOpenPrinterModal,
+  isMaster = false,
+  onOpenReceiptEditor,
 }) => {
   const [isPrinting, setIsPrinting] = useState(false);
   const [printSuccess, setPrintSuccess] = useState<string | null>(null);
@@ -58,26 +68,40 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  useEffect(() => {
+    if (!isOpen || !order) return;
+    document.body.classList.add('thermal-print-active');
+    return () => {
+      document.body.classList.remove('thermal-print-active');
+    };
+  }, [isOpen, order]);
+
   if (!isOpen || !order) return null;
 
-  const maxChars = getLineCharLimit(printerConfig.paperWidth);
+  const maxChars = getLineCharLimit(printerConfig.paperWidth, printerConfig.customCharPerLine);
+  const rt = resolveReceiptTexts(store);
 
-  // Generate plain text formatted for thermal receipt
+  // Generate plain text formatted for thermal receipt (Salin Struk)
   const generateReceiptText = () => {
     const lines: string[] = [];
-    lines.push(centerText(store.storeName, maxChars));
-    if (store.tagline) lines.push(centerText(store.tagline, maxChars));
-    if (store.address) lines.push(centerText(store.address, maxChars));
-    if (store.phone) lines.push(centerText(`Telp: ${store.phone}`, maxChars));
+    wrapTextLines(store.storeName, maxChars).forEach((ln) => lines.push(centerText(ln, maxChars)));
+    if (store.tagline) wrapTextLines(store.tagline, maxChars).forEach((ln) => lines.push(centerText(ln, maxChars)));
+    if (store.address) wrapTextLines(store.address, maxChars).forEach((ln) => lines.push(centerText(ln, maxChars)));
+    if (store.phone) lines.push(centerText(`${rt.phoneLabel}: ${store.phone}`, maxChars));
+    if (rt.headerNote) {
+      rt.headerNote.split(/\r?\n/).forEach((hn) => {
+        if (hn.trim()) wrapTextLines(hn, maxChars).forEach((ln) => lines.push(centerText(ln, maxChars)));
+      });
+    }
     lines.push(createSeparator('=', maxChars));
 
-    lines.push(justifyLine(`No: #${order.id}`, formatTimeOnly(order.timestamp), maxChars));
-    lines.push(justifyLine(`Tgl: ${formatDateOnly(order.timestamp)}`, `Kasir: ${order.cashierName}`, maxChars));
-    if (order.customerName || order.tableNumber) {
+    lines.push(...justifyWrappedLines(`${rt.receiptNumberLabel}: #${order.id}`, formatTimeOnly(order.timestamp), maxChars));
+    lines.push(...justifyWrappedLines(`${rt.dateLabel}: ${formatShortDate(order.timestamp)}`, `${rt.cashierLabel}: ${order.cashierName}`, maxChars));
+    if (order.customerName || order.tableNumber || order.orderType !== 'dine_in') {
       lines.push(
-        justifyLine(
-          order.customerName ? `Plg: ${order.customerName}` : '',
-          order.tableNumber ? `Meja: ${order.tableNumber}` : (order.orderType === 'takeaway' ? 'Bungkus' : ''),
+        ...justifyWrappedLines(
+          `${rt.customerLabel}: ${order.customerName || '-'}`,
+          formatOrderTypeLabel(order.orderType, order.tableNumber),
           maxChars
         )
       );
@@ -86,53 +110,57 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
 
     order.items.forEach((item) => {
       lines.push(
-        justifyLine(
+        ...justifyWrappedLines(
           `${item.quantity}x ${item.product.name}`,
           formatNumber(item.product.price * item.quantity),
           maxChars
         )
       );
-      if (item.note) lines.push(`  * ${item.note}`);
+      if (item.note) wrapTextLines(`  * ${item.note}`, maxChars).forEach((ln) => lines.push(ln));
       if (item.discount > 0) {
-        lines.push(justifyLine('  Diskon Item', `-${formatNumber(item.discount)}`, maxChars));
+        lines.push(...justifyWrappedLines('  Diskon Item', `-${formatNumber(item.discount)}`, maxChars));
       }
     });
 
     lines.push(createSeparator('-', maxChars));
-    lines.push(justifyLine('Subtotal', formatRupiah(order.subtotal), maxChars));
+    lines.push(...justifyWrappedLines(rt.subtotalLabel, formatRupiah(order.subtotal), maxChars));
     if (order.discount > 0) {
       const pct = order.discountPercent ?? (order.subtotal > 0 ? Math.round((order.discount / order.subtotal) * 100) : 0);
-      const discTitle = pct > 0 ? `Diskon Nota (${pct}%)` : 'Diskon Nota';
-      lines.push(justifyLine(discTitle, `-${formatRupiah(order.discount)}`, maxChars));
+      const discTitle = pct > 0 ? `${rt.discountLabel} (${pct}%)` : rt.discountLabel;
+      lines.push(...justifyWrappedLines(discTitle, `-${formatRupiah(order.discount)}`, maxChars));
     }
     if (order.taxAmount > 0) {
-      lines.push(justifyLine(`Pajak (${Math.round(order.taxRate * 100)}%)`, formatRupiah(order.taxAmount), maxChars));
+      lines.push(...justifyWrappedLines(`${rt.taxLabel} (${Math.round(order.taxRate * 100)}%)`, formatRupiah(order.taxAmount), maxChars));
     }
     if (order.serviceChargeAmount > 0) {
-      lines.push(justifyLine(`Layanan (${Math.round(order.serviceChargeRate * 100)}%)`, formatRupiah(order.serviceChargeAmount), maxChars));
+      lines.push(
+        ...justifyWrappedLines(
+          `${rt.serviceLabel} (${Math.round(order.serviceChargeRate * 100)}%)`,
+          formatRupiah(order.serviceChargeAmount),
+          maxChars
+        )
+      );
     }
     lines.push(createSeparator('=', maxChars));
-    lines.push(justifyLine('TOTAL', formatRupiah(order.total), maxChars));
+    lines.push(...justifyWrappedLines(rt.totalLabel, formatRupiah(order.total), maxChars));
+    lines.push(createSeparator('-', maxChars));
 
-    const methodLabels: Record<string, string> = {
-      cash: 'TUNAI',
-      qris: 'QRIS',
-      transfer: 'TRANSFER',
-      debit: 'DEBIT',
-      credit: 'KREDIT',
-    };
-    lines.push(justifyLine('Metode Bayar', methodLabels[order.paymentMethod] || order.paymentMethod.toUpperCase(), maxChars));
+    lines.push(...justifyWrappedLines(rt.paymentMethodLabel, formatPaymentMethodLabel(order.paymentMethod), maxChars));
     if (order.paymentMethod === 'cash') {
-      lines.push(justifyLine('Bayar', formatRupiah(order.amountPaid), maxChars));
-      lines.push(justifyLine('Kembalian', formatRupiah(order.change), maxChars));
+      lines.push(...justifyWrappedLines(rt.amountPaidLabel, formatRupiah(order.amountPaid), maxChars));
+      lines.push(...justifyWrappedLines(rt.changeLabel, formatRupiah(order.change), maxChars));
     }
     lines.push(createSeparator('-', maxChars));
 
     if (printerConfig.printWifiInfo && store.wifiName) {
-      lines.push(centerText(`WiFi: ${store.wifiName} | Pass: ${store.wifiPassword || '-'}`, maxChars));
+      wrapTextLines(`${rt.wifiLabel}: ${store.wifiName} | ${rt.wifiPasswordLabel}: ${store.wifiPassword || '-'}`, maxChars).forEach((ln) =>
+        lines.push(centerText(ln, maxChars))
+      );
     }
     if (printerConfig.printFooterNote && store.footerNote) {
-      store.footerNote.split('\n').forEach((fn) => lines.push(centerText(fn, maxChars)));
+      store.footerNote.split(/\r?\n/).forEach((fn) =>
+        wrapTextLines(fn, maxChars).forEach((ln) => lines.push(centerText(ln, maxChars)))
+      );
     } else {
       lines.push(centerText('Terima Kasih Atas Kunjungan Anda!', maxChars));
       lines.push(centerText('Barang yang dibeli tidak dapat ditukar', maxChars));
@@ -155,7 +183,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
         }
       }
 
-      const bytes = bluetoothPrinter.generateReceiptBytes(order, store, printerConfig);
+      const bytes = await bluetoothPrinter.generateReceiptBytesWithLogo(order, store, printerConfig);
       await bluetoothPrinter.sendRawData(bytes);
 
       setPrintSuccess('Struk berhasil dikirim ke printer thermal Bluetooth!');
@@ -212,26 +240,210 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
     });
   };
 
+  // Shared visual receipt body used for both on-screen preview and browser print (#thermal-print-target)
+  const receiptBody = (
+    <>
+      {/* Receipt Header */}
+      <div className="space-y-1 text-center">
+        {printerConfig.printStoreLogo && store.logoUrl && (
+          <div className="w-16 h-16 mx-auto mb-2 flex items-center justify-center grayscale contrast-125 print:filter-none">
+            <img
+              src={store.logoUrl}
+              alt={store.storeName}
+              loading="eager"
+              decoding="sync"
+              className="max-h-16 max-w-16 w-auto h-auto object-contain print:block"
+            />
+          </div>
+        )}
+        <div className="font-extrabold text-sm sm:text-base tracking-wide text-slate-900 print:text-black">
+          {store.storeName}
+        </div>
+        {store.tagline && <p className="text-[11px] text-slate-600 print:text-black">{store.tagline}</p>}
+        {store.address && <p className="text-[10px] text-slate-500 print:text-black">{store.address}</p>}
+        {store.phone && <p className="text-[10px] text-slate-500 print:text-black">{rt.phoneLabel}: {store.phone}</p>}
+        {rt.headerNote && (
+          <p className="text-[10px] text-slate-600 print:text-black italic whitespace-pre-line pt-0.5">
+            {rt.headerNote}
+          </p>
+        )}
+      </div>
+
+      <div className="my-2 border-t border-dashed border-slate-300 print:border-slate-700" />
+
+      {/* Metadata */}
+      <div className="text-[11px] space-y-0.5 text-slate-700 print:text-black tabular-nums">
+        <div className="flex justify-between gap-2">
+          <span className="break-all">{rt.receiptNumberLabel}: #{order.id}</span>
+          <span className="shrink-0">{formatTimeOnly(order.timestamp)}</span>
+        </div>
+        <div className="flex justify-between gap-2">
+          <span>{rt.dateLabel}: {formatShortDate(order.timestamp)}</span>
+          <span className="text-right break-words">{rt.cashierLabel}: {order.cashierName}</span>
+        </div>
+        {(order.customerName || order.tableNumber || order.orderType !== 'dine_in') && (
+          <div className="flex justify-between gap-2">
+            <span className="break-words">{rt.customerLabel}: {order.customerName || '-'}</span>
+            <span className="shrink-0">{formatOrderTypeLabel(order.orderType, order.tableNumber)}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="my-2 border-t border-dashed border-slate-300 print:border-slate-700" />
+
+      {/* Items */}
+      <div className="space-y-1 text-[11px] tabular-nums">
+        {order.items.map((item, idx) => (
+          <div key={idx} className="space-y-0.5">
+            <div className="flex justify-between items-start gap-2 font-medium text-slate-900 print:text-black">
+              <span className="break-words min-w-0">
+                {item.quantity}x {item.product.name}
+              </span>
+              <span className="shrink-0 text-right">{formatNumber(item.product.price * item.quantity)}</span>
+            </div>
+            {item.note && (
+              <div className="text-[10px] text-slate-500 print:text-slate-700 pl-3 italic break-words">
+                ↳ {item.note}
+              </div>
+            )}
+            {item.discount > 0 && (
+              <div className="flex justify-between text-[10px] text-emerald-600 print:text-black pl-3">
+                <span>Diskon item</span>
+                <span>-{formatNumber(item.discount)}</span>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className="my-2 border-t border-dashed border-slate-300 print:border-slate-700" />
+
+      {/* Calculations */}
+      <div className="space-y-0.5 text-[11px] text-slate-700 print:text-black tabular-nums">
+        <div className="flex justify-between gap-2">
+          <span>{rt.subtotalLabel}</span>
+          <span className="shrink-0">{formatRupiah(order.subtotal)}</span>
+        </div>
+        {order.discount > 0 && (
+          <div className="flex justify-between gap-2 text-emerald-600 print:text-black">
+            <span>
+              {rt.discountLabel}{' '}
+              {order.discountPercent
+                ? `(${order.discountPercent}%)`
+                : order.subtotal > 0
+                  ? `(${Math.round((order.discount / order.subtotal) * 100)}%)`
+                  : ''}
+            </span>
+            <span className="shrink-0">-{formatRupiah(order.discount)}</span>
+          </div>
+        )}
+        {order.taxAmount > 0 && (
+          <div className="flex justify-between gap-2">
+            <span>{rt.taxLabel} ({Math.round(order.taxRate * 100)}%)</span>
+            <span className="shrink-0">{formatRupiah(order.taxAmount)}</span>
+          </div>
+        )}
+        {order.serviceChargeAmount > 0 && (
+          <div className="flex justify-between gap-2">
+            <span>{rt.serviceLabel} ({Math.round(order.serviceChargeRate * 100)}%)</span>
+            <span className="shrink-0">{formatRupiah(order.serviceChargeAmount)}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="my-2 border-t-2 border-slate-800 print:border-black" />
+
+      {/* Grand Total */}
+      <div className="flex justify-between items-center gap-2 text-sm font-extrabold text-slate-900 print:text-black tabular-nums">
+        <span>{rt.totalLabel}</span>
+        <span className="text-base">{formatRupiah(order.total)}</span>
+      </div>
+
+      <div className="my-2 border-t border-dashed border-slate-300 print:border-slate-700" />
+
+      {/* Payment Details */}
+      <div className="text-[11px] space-y-0.5 text-slate-700 print:text-black tabular-nums">
+        <div className="flex justify-between gap-2">
+          <span>{rt.paymentMethodLabel}</span>
+          <span className="font-semibold uppercase">{formatPaymentMethodLabel(order.paymentMethod)}</span>
+        </div>
+        {order.paymentMethod === 'cash' && (
+          <>
+            <div className="flex justify-between gap-2">
+              <span>{rt.amountPaidLabel}</span>
+              <span>{formatRupiah(order.amountPaid)}</span>
+            </div>
+            <div className="flex justify-between gap-2 font-medium">
+              <span>{rt.changeLabel}</span>
+              <span>{formatRupiah(order.change)}</span>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="my-2 border-t border-dashed border-slate-300 print:border-slate-700" />
+
+      {/* Footer */}
+      <div className="text-center text-[10px] text-slate-600 print:text-black space-y-1 pt-1">
+        {printerConfig.printWifiInfo && store.wifiName && (
+          <p className="break-words">
+            {rt.wifiLabel}: <span className="font-bold">{store.wifiName}</span> | {rt.wifiPasswordLabel}:{' '}
+            <span className="font-bold">{store.wifiPassword || '-'}</span>
+          </p>
+        )}
+        {printerConfig.printFooterNote && store.footerNote ? (
+          <div className="whitespace-pre-line break-words">{store.footerNote}</div>
+        ) : (
+          <>
+            <p>Terima Kasih Atas Kunjungan Anda!</p>
+            <p>Barang yang dibeli tidak dapat ditukar</p>
+          </>
+        )}
+      </div>
+    </>
+  );
+
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden flex flex-col max-h-[92vh] animate-in fade-in zoom-in-95 duration-200">
         {/* Header */}
-        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center">
+        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50 gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
               <Printer className="w-4 h-4" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h3 className="font-bold text-slate-800 text-base">Struk Pembayaran</h3>
-              <p className="text-xs text-slate-500 font-mono">#{order.id}</p>
+              <p className="text-xs text-slate-500 font-mono truncate">#{order.id}</p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-lg hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {isMaster && onOpenReceiptEditor && (
+              <button
+                type="button"
+                onClick={onOpenReceiptEditor}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-300 hover:bg-amber-100 text-[11px] font-bold text-amber-800 transition-colors cursor-pointer"
+                title="Edit kata-kata & label struk (Khusus Master)"
+              >
+                <Pencil className="w-3 h-3" />
+                <span>Edit Kata Struk</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onOpenPrinterModal}
+              className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 hover:border-emerald-400 text-[11px] font-semibold text-slate-600 hover:text-emerald-700 transition-colors cursor-pointer"
+              title="Ubah ukuran kertas & pengaturan printer"
+            >
+              {printerConfig.paperWidth} · {maxChars} kol
+            </button>
+            <button
+              onClick={onClose}
+              className="w-8 h-8 rounded-lg hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Status notification */}
@@ -257,6 +469,19 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
           </div>
         )}
 
+        {store.logoUrl && !printerConfig.printStoreLogo && (
+          <div className="mx-5 mt-3 p-2.5 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between gap-2 text-amber-900 text-xs">
+            <span>Opsi cetak logo pada struk sedang nonaktif.</span>
+            <button
+              type="button"
+              onClick={onOpenPrinterModal}
+              className="font-bold text-amber-800 underline hover:text-amber-950 shrink-0 cursor-pointer"
+            >
+              Aktifkan
+            </button>
+          </div>
+        )}
+
         {/* Visual Receipt Preview Container */}
         <div className="p-4 sm:p-6 overflow-y-auto bg-slate-100 flex justify-center">
           <div
@@ -266,153 +491,8 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
               isSimulating ? 'translate-y-2 opacity-90' : ''
             }`}
           >
-            {/* Top cut serration */}
             <div className="receipt-cut-top -mt-4 -mx-4 mb-3"></div>
-
-            {/* Receipt Body */}
-            <div className="space-y-1 text-center">
-              {/* Store Logo on thermal receipt if enabled */}
-              {printerConfig.printStoreLogo && store.logoUrl && (
-                <div className="w-12 h-12 mx-auto mb-2 flex items-center justify-center grayscale contrast-150">
-                  <img
-                    src={store.logoUrl}
-                    alt={store.storeName}
-                    className="max-h-12 max-w-12 object-contain"
-                  />
-                </div>
-              )}
-              <div className="font-extrabold text-sm sm:text-base tracking-wide text-slate-900">
-                {store.storeName}
-              </div>
-              {store.tagline && <p className="text-[11px] text-slate-600">{store.tagline}</p>}
-              {store.address && <p className="text-[10px] text-slate-500">{store.address}</p>}
-              {store.phone && <p className="text-[10px] text-slate-500">Telp: {store.phone}</p>}
-            </div>
-
-            <div className="my-2 border-t border-dashed border-slate-300" />
-
-            {/* Metadata */}
-            <div className="text-[11px] space-y-0.5 text-slate-700">
-              <div className="flex justify-between">
-                <span>No: #{order.id}</span>
-                <span>{formatTimeOnly(order.timestamp)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Tgl: {formatDateOnly(order.timestamp)}</span>
-                <span>Kasir: {order.cashierName}</span>
-              </div>
-              {(order.customerName || order.tableNumber) && (
-                <div className="flex justify-between">
-                  <span>Plg: {order.customerName || '-'}</span>
-                  <span>{order.tableNumber ? `Meja: ${order.tableNumber}` : 'Bungkus'}</span>
-                </div>
-              )}
-            </div>
-
-            <div className="my-2 border-t border-dashed border-slate-300" />
-
-            {/* Items */}
-            <div className="space-y-1 text-[11px]">
-              {order.items.map((item, idx) => (
-                <div key={idx} className="space-y-0.5">
-                  <div className="flex justify-between font-medium">
-                    <span className="truncate pr-2">
-                      {item.quantity}x {item.product.name}
-                    </span>
-                    <span className="shrink-0">{formatNumber(item.product.price * item.quantity)}</span>
-                  </div>
-                  {item.note && <div className="text-[10px] text-slate-500 pl-3 italic">↳ {item.note}</div>}
-                  {item.discount > 0 && (
-                    <div className="flex justify-between text-[10px] text-emerald-600 pl-3">
-                      <span>Diskon item</span>
-                      <span>-{formatNumber(item.discount)}</span>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            <div className="my-2 border-t border-dashed border-slate-300" />
-
-            {/* Calculations */}
-            <div className="space-y-0.5 text-[11px] text-slate-700">
-              <div className="flex justify-between">
-                <span>Subtotal</span>
-                <span>{formatRupiah(order.subtotal)}</span>
-              </div>
-              {order.discount > 0 && (
-                <div className="flex justify-between text-emerald-600">
-                  <span>
-                    Diskon Nota {order.discountPercent ? `(${order.discountPercent}%)` : (order.subtotal > 0 ? `(${Math.round((order.discount / order.subtotal) * 100)}%)` : '')}
-                  </span>
-                  <span>-{formatRupiah(order.discount)}</span>
-                </div>
-              )}
-              {order.taxAmount > 0 && (
-                <div className="flex justify-between">
-                  <span>Pajak ({Math.round(order.taxRate * 100)}%)</span>
-                  <span>{formatRupiah(order.taxAmount)}</span>
-                </div>
-              )}
-              {order.serviceChargeAmount > 0 && (
-                <div className="flex justify-between">
-                  <span>Biaya Layanan ({Math.round(order.serviceChargeRate * 100)}%)</span>
-                  <span>{formatRupiah(order.serviceChargeAmount)}</span>
-                </div>
-              )}
-            </div>
-
-            <div className="my-2 border-t-2 border-slate-800" />
-
-            {/* Grand Total */}
-            <div className="flex justify-between items-center text-sm font-extrabold text-slate-900">
-              <span>TOTAL</span>
-              <span className="text-base">{formatRupiah(order.total)}</span>
-            </div>
-
-            <div className="my-2 border-t border-dashed border-slate-300" />
-
-            {/* Payment Details */}
-            <div className="text-[11px] space-y-0.5 text-slate-700">
-              <div className="flex justify-between">
-                <span>Metode Bayar</span>
-                <span className="font-semibold uppercase">{order.paymentMethod}</span>
-              </div>
-              {order.paymentMethod === 'cash' && (
-                <>
-                  <div className="flex justify-between">
-                    <span>Nominal Bayar</span>
-                    <span>{formatRupiah(order.amountPaid)}</span>
-                  </div>
-                  <div className="flex justify-between font-medium">
-                    <span>Kembalian</span>
-                    <span>{formatRupiah(order.change)}</span>
-                  </div>
-                </>
-              )}
-            </div>
-
-            <div className="my-2 border-t border-dashed border-slate-300" />
-
-            {/* Footer */}
-            <div className="text-center text-[10px] text-slate-600 space-y-1 pt-1">
-              {printerConfig.printWifiInfo && store.wifiName && (
-                <p>
-                  WiFi: <span className="font-bold">{store.wifiName}</span> | Pass:{' '}
-                  <span className="font-bold">{store.wifiPassword || '-'}</span>
-                </p>
-              )}
-              {printerConfig.printFooterNote && store.footerNote ? (
-                <div className="whitespace-pre-line">{store.footerNote}</div>
-              ) : (
-                <>
-                  <p>Terima Kasih Atas Kunjungan Anda!</p>
-                  <p>Barang yang dibeli tidak dapat ditukar</p>
-                </>
-              )}
-            </div>
-
-            {/* Bottom cut serration */}
+            {receiptBody}
             <div className="receipt-cut-bottom -mb-4 -mx-4 mt-3"></div>
           </div>
         </div>
@@ -520,13 +600,17 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
         </div>
       </div>
 
-      {/* Hidden browser print element (activated by @media print) */}
-      <div
-        id="thermal-print-target"
-        className={`hidden print:block ${printerConfig.paperWidth === '80mm' ? 'paper-80mm' : ''}`}
-      >
-        <pre className="font-mono text-xs whitespace-pre-wrap leading-tight">{generateReceiptText()}</pre>
-      </div>
+      {/* Portaled visual print target matching preview 1:1 */}
+      {typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            id="thermal-print-target"
+            className={`hidden print:block ${printerConfig.paperWidth === '80mm' ? 'paper-80mm' : ''}`}
+          >
+            <div className="receipt-paper font-mono-thermal text-xs text-black">{receiptBody}</div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

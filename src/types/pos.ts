@@ -49,6 +49,25 @@ export interface Order {
   notes?: string;
 }
 
+export interface ReceiptCustomTexts {
+  headerNote?: string;
+  phoneLabel?: string;
+  receiptNumberLabel?: string;
+  dateLabel?: string;
+  cashierLabel?: string;
+  customerLabel?: string;
+  subtotalLabel?: string;
+  discountLabel?: string;
+  taxLabel?: string;
+  serviceLabel?: string;
+  totalLabel?: string;
+  paymentMethodLabel?: string;
+  amountPaidLabel?: string;
+  changeLabel?: string;
+  wifiLabel?: string;
+  wifiPasswordLabel?: string;
+}
+
 export interface StoreProfile {
   storeName: string;
   tagline: string;
@@ -68,6 +87,7 @@ export interface StoreProfile {
   serviceChargePercentage: number;
   lowStockThreshold?: number; // Configurable stock threshold (default: 10)
   currency: string;
+  receiptTexts?: ReceiptCustomTexts;
 }
 
 export type PaperWidth = '58mm' | '80mm';
